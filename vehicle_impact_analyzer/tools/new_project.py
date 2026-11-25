@@ -46,6 +46,7 @@ analysis:
   # graph_cluster_threshold: 150      # 영향 그래프 묶음 표시 기준
   # mmio_map: {{PWM_DUTY_REG: 0xF0003000}}
 output_dir: out
+feature_map: feature_map.yaml   # 함수 → 기능 매핑('기능 영향' 탭). 비어 있으면 자동(SWC·폴더 구조·파일 이름)
 # review_file: feature_review.yaml    # 검토자가 기능 연결을 확정/기각한 기록(선택)
 # ground_truth: ground_truth.yaml     # 평가용 정답셋(선택, 있으면 evaluate.py 실행)
 # history: {{git: 'S:/proj/repo'}}       # 공변경 근거(선택)
@@ -73,6 +74,23 @@ execution:                             # 실행 문맥(선택): 태스크·ISR �
   #   - {{name: ISR_CanRx, entry: Can_RxIsr, priority: 20}}
 signals: []
 # a2l: [calibration.a2l]               # 캘리브레이션 범위(선택)
+"""
+
+
+FEATURE_MAP = """# 기능 매핑 — 함수를 SW 기능 묶음으로 나눈다. 비워 두면 자동(AUTOSAR SWC 전용 함수 → 폴더 구조 → 파일 이름).
+# 첫 실행 뒤 out/feature_map_suggested.yaml(자동 결과)을 이 파일에 옮겨 고치면 검증자가 정한 대로 묶인다.
+# 우선순위: overrides > functions(함수 이름) > paths(경로) > swcs(SWC 전용 함수) > structure 규칙 > 자동
+features: []
+# features:
+#   - id: PWM
+#     name: PWM 출력
+#     paths: ['AP/Function/PWM/**']       # 폴더·파일(글롭: ** 아래 전부, * 이름 일부)
+#     functions: ['Pwm_*']                # 함수 이름(글롭)
+#     swcs: [SWC_Pwm]                     # 그 SWC의 Runnable에서만 호출되는 함수
+#     tests: ['TC_PWM_001 듀티 경계값']    # 회귀 시험 케이스(보고서·CSV에 그대로 표시)
+# structure: ['AP/Function/{feature}/**', 'BSW/{feature}/**']   # 폴더 이름을 기능 이름으로
+# ignore: ['**/Test/**', '**/Stub/**']    # 기능 집계에서 뺄 파일
+# overrides: {Some_Function: PWM}         # 함수 하나씩 바로잡기
 """
 
 
@@ -169,6 +187,11 @@ def main(argv=None) -> int:
         print(f"유지: {vm} (이미 있음)")
     else:
         _write(vm, VEHICLE.format(ecu=a.ecu), a.force)
+    fm = os.path.join(a.dir, "feature_map.yaml")
+    if os.path.exists(fm):
+        print(f"유지: {fm} (이미 있음 — 검증자가 고친 매핑은 덮어쓰지 않음)")
+    else:
+        _write(fm, FEATURE_MAP, False)
 
     from vfia.config_check import check_config, load_config_checked
     cfg = load_config_checked(os.path.join(a.dir, "analysis.yaml"))

@@ -247,6 +247,65 @@ dot -Tsvg out/graph_export/impact_C003.dot -o impact_C003.svg
 함수 그래프 809노드·2391연결을 묶음 없이 그려도 가장 긴 작업 0.3~0.65초(화면 멈춤 없음), 묶음 표시 기본 화면은
 0.1초대. 예제 보고서는 외부 네트워크 요청 없이 동작함을 확인.
 
+## 기능 영향(보고서 '기능 영향' 탭)
+
+함수 단위 영향을 **SW 기능(Feature) 묶음**으로 모아 "이 변경이 어떤 기능에 영향을 주는가"를 보인다. 보고서 상단 요약에
+'영향받는 기능 N개'(변경·직접·간접)가 나오고, '기능 영향' 탭에 아래 네 부분이 있다.
+
+1. **변경 → 영향받는 기능 → 외부 출력**: 변경마다 단계별로 표시. 단계 = 변경 기능에서 기능 경계를 넘은 횟수.
+   - **변경 기능**(단계 0): 변경된 코드가 들어 있는 기능
+   - **직접 영향**(1단계): 변경 기능과 바로 연결된 기능
+   - **간접 영향**(2단계 이상)
+   - **외부 출력**: CAN·RTE 신호, 레지스터, 관찰 대상
+   - **연결 근거**: 단계마다 붙는다. 변수 이름(쓰는 함수 → 읽는 함수), 신호 이름, 호출·반환값·인자 전달
+   - **실행 문맥 변경**: 태스크 주기처럼 실행 문맥 설정이 바뀌면 그 문맥에서 실행되는 기능이 직접 영향이 된다(예: '주기 10→20ms').
+2. **회귀 시험 범위 제안**: 영향받는 기능마다 다음을 제안한다. `out/feature_regression_scope.csv`(Excel용 UTF-8 BOM)로도 저장한다.
+   - 구분(변경/직접/간접)과 관련 변경
+   - 영향 이유(전파 경로)
+   - 시험 대상: 변경 함수, 경계 함수(다른 기능에서 호출되거나 태스크·Runnable 진입 함수), 입력(들어오는 변수·신호), 관찰할 출력
+   - 매핑 파일에 적은 시험 케이스, 동작 차이 조건(예: 'request_pct ≥ 81 ∧ 30 ≤ speed_kph ≤ 39 ∧ sensor_ok = 1일 때 80 → request_pct')
+3. **기능 간 의존 행렬**: 행 = 보내는 기능, 열 = 받는 기능, 칸 = 호출 수 / 공유 변수 수 / 신호 수.
+   - 변경 전·후를 비교한다. 새로 생긴 의존은 초록, 사라진 의존은 빨강, 수가 바뀐 의존은 점선 테두리.
+   - 칸에 마우스를 올리면 근거 이름이 보인다. `out/feature_dependency.csv`로도 저장한다.
+   - 그래프로는 '영향 그래프' 탭의 **4. 기능 의존·영향**으로 본다. 변경을 고르면 단계별 색, 흐린 노드 = 영향 없음.
+4. **기능 매핑**: 기능마다 함수 수(전→후), 근거, 파일, 외부 출력, 지정 시험을 보여 준다.
+   - 함수별 근거 전체를 펼쳐 볼 수 있다.
+   - 변경 전·후에 기능이 바뀐 함수, 여러 SWC가 같이 쓰는 함수도 따로 표시한다.
+
+함수 → 기능 매핑(앞의 것이 우선, 함수마다 근거 기록):
+
+| 순서 | 방법 | 설명 |
+|---|---|---|
+| 1 | 매핑 파일 `overrides` | 함수 하나씩 바로잡기 |
+| 2 | 매핑 파일 `functions` / `paths` / `swcs` | 함수 이름 글롭, 경로 글롭(`AP/Function/PWM/**`), AUTOSAR SWC |
+| 3 | 매핑 파일 `structure` | 폴더 구조 규칙(`AP/Function/{feature}/**` → 폴더 이름이 기능) |
+| 4 | AUTOSAR(자동) | ARXML의 SWC·Runnable에서 **그 SWC의 Runnable에서만 호출되는 함수** = SWC 전용 함수 → SWC 이름 |
+| 5 | 폴더 구조(자동) | 파일이 있는 기능 폴더(`src`·`inc`·`cfg` 같은 일반 이름은 건너뜀, `AP/Function/PWM/src/pwm.c` → `PWM`) |
+| 6 | 파일 이름 | 모든 파일이 한 폴더에 있을 때 |
+
+전역 변수는 같은 파일 함수들의 기능, 신호는 연결 근거로 쓴다. 매핑 파일은 설정의 `feature_map`으로 지정한다.
+
+```yaml
+# feature_map.yaml
+features:
+  - id: PWM
+    name: PWM 출력
+    paths: ['AP/Function/PWM/**']
+    functions: ['Pwm_*']
+    swcs: [SWC_Pwm]
+    tests: ['TC_PWM_001 듀티 경계값']
+structure: ['AP/Function/{feature}/**']
+ignore: ['**/Test/**']
+overrides: {Some_Function: PWM}
+```
+
+검증자 보정 흐름:
+1. 처음에는 매핑 파일 없이(또는 빈 파일로) 실행한다.
+2. `out/feature_map_suggested.yaml`(자동 결과)을 `feature_map.yaml`로 복사해 고친다.
+3. 다시 실행한다.
+
+`tools/new_project.py`는 빈 `feature_map.yaml`(주석 예시 포함)을 만들어 연결한다. 기능 영향이 필요 없으면 `--no-feature`.
+
 ## 예제 결과(요약)
 
 - 임계값 30→40: `request_pct ≥ 81 ∧ 30 ≤ speed_kph ≤ 39 ∧ sensor_ok = 1` 일 때 토크 명령 80 → `request_pct`
@@ -274,6 +333,7 @@ dot -Tsvg out/graph_export/impact_C003.dot -o impact_C003.svg
 | `symexec` / `conditions` / `behavior_checker` | 유계 기호 실행(C 정수 의미, RTE, 캘리브레이션, MMIO), 차이 조건·설명, 분기 차이별 시험 입력, 전후 비교 실행 |
 | `mvp_impact` / `resources` / `assumptions` / `report_generator` | 2.5단계 MVP, 비기능 추정, 분석 가정, JSON/HTML |
 | `portable` / `builtin_include/` | OS 차이 흡수(경로·명령줄·인코딩·하위 프로세스·해시 시드), Clang 내장 헤더 대체본 |
+| `feature_impact` | 함수 → 기능 매핑(매핑 파일·AUTOSAR·폴더 구조), 기능 간 의존 행렬, 변경 영향 단계 전파, 회귀 시험 범위, '기능 영향' 탭, CSV |
 | `impact_graph` / `report_assets/` / `vendor/` | 영향 그래프 데이터(변경 영향·함수 의존·모듈 의존, 전후 비교, 위험 후보), DOT·GraphML 내보내기, 보고서 탭(HTML·JS), 내장 Cytoscape.js |
 
 ## 기존 도구와의 관계(차별점)

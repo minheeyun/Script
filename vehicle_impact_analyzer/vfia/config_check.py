@@ -147,6 +147,16 @@ def check_config(cfg: AnalysisConfig, versions: Optional[List[str]] = None) -> T
         warns.append(f"history.file이 없음(공변경 근거 생략): {hist['file']}")
     if hist.get("git") and not os.path.isdir(hist["git"]):
         warns.append(f"history.git 폴더가 없음(공변경 근거 생략): {hist['git']}")
+    if cfg.feature_map:
+        if not os.path.isfile(cfg.feature_map):
+            errors.append(f"feature_map 파일이 없음: {cfg.feature_map}\n"
+                          "    → 경로를 고치거나 설정에서 feature_map을 빼세요(빼면 자동 매핑).")
+        else:
+            try:
+                from .feature_impact import load_feature_map
+                load_feature_map(cfg.feature_map)
+            except Exception as e:
+                errors.append(f"feature_map 파일을 읽을 수 없음: {cfg.feature_map} ({e})")
     if cfg.ground_truth and not os.path.isfile(cfg.ground_truth):
         warns.append(f"ground_truth가 없음: 평가(evaluate.py) 단계는 건너뜁니다 ({cfg.ground_truth})")
     if "VARIANT_SPORT" in (cfg.build.name or "") or cfg.project == "torque_ecu":

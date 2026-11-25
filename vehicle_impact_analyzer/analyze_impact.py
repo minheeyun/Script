@@ -91,6 +91,7 @@ def main(argv=None) -> int:
     ap.add_argument("--strict", action="store_true",
                     help="파싱 성공률이 기준(analysis.min_parse_success_rate) 미만이면 종료 코드 2")
     ap.add_argument("--no-graph", action="store_true", help="보고서 '영향 그래프' 탭과 graph_export 파일을 만들지 않음")
+    ap.add_argument("--no-feature", action="store_true", help="기능 단위 영향('기능 영향' 탭)을 만들지 않음")
     ap.add_argument("--quiet", action="store_true")
     a = ap.parse_args(argv)
     pt.setup_console()
@@ -173,18 +174,29 @@ def main(argv=None) -> int:
     data["review"] = review_items(results, behavior, meta, scope, data)
     meta["seconds"] = round(time.time() - t0, 2)
     jp, hp = os.path.join(out, "impact.json"), os.path.join(out, "impact.html")
+    fi, fi_files = None, []
+    if not a.no_feature:
+        log("기능 단위 영향(함수 → 기능 매핑, 기능 간 의존, 전파, 회귀 시험 범위)...")
+        from vfia.feature_impact import build_feature_impact, load_feature_map, write_csvs
+        fi = build_feature_impact(go, gn, results, ia, behavior, load_feature_map(cfg.feature_map))
+        fi_files = [os.path.relpath(p, out).replace(os.sep, "/") for p in write_csvs(fi, out)]
+        data["feature_impact"] = {k: v for k, v in fi.items() if k != "suggested_map"}
+        data["feature_impact"]["files"] = fi_files
     graph, exported = None, None
     if not a.no_graph:
         log("영향 그래프(변경 영향·함수 의존·모듈 의존) 생성...")
         from vfia.impact_graph import build_graph_data, write_exports
         graph = build_graph_data(go, gn, results, ia, cfg.options, a.before, a.after)
+        if fi:
+            from vfia.feature_impact import graph_payload
+            graph["feature_units"] = graph_payload(fi)
         exported = write_exports(graph, os.path.join(out, "graph_export"))
         write_json(os.path.join(out, "impact_graph.json"), graph)
         data["graphs"] = {"data": "impact_graph.json", "export_dir": "graph_export", "files": exported,
                           "program_nodes": len(graph["program"]["n"]),
                           "impact_nodes": {cid: len(v["n"]) for cid, v in graph["impact"].items()}}
     write_json(jp, data)
-    impact_report_html(data, hp, graph=graph, exported=exported)
+    impact_report_html(data, hp, graph=graph, exported=exported, feature=fi, feature_files=fi_files)
     log(f"\n영향 분석 결과: {jp}\n검토 보고서:   {hp}  ({meta['seconds']}s)")
     if a.strict and not rate_ok:
         log("파싱 기준 미달(--strict): 종료 코드 2")
@@ -195,6 +207,13 @@ def main(argv=None) -> int:
     nofeat = [c["id"] for c in results if not c["impact"]["features"]]
     if nofeat:
         log(f"  (기능 관찰 대상까지 경로 미발견: {', '.join(nofeat)})")
+    if fi:
+        s = fi["summary"]
+        log(f"\n영향받는 기능 {s['affected']}개(변경 {s['changed']} · 직접 {s['direct']} · 간접 {s['indirect']}), "
+            f"영향받는 외부 출력 {s['outputs']}개:")
+        for r in fi["regression"]:
+            log(f"  {r['tier_label']:<6} {r['feature']:<24} 단계 {r['stage']}  변경 {', '.join(r['changes'])}")
+        log(f"회귀 시험 범위: {', '.join(fi_files)}")
     return 0
 
 

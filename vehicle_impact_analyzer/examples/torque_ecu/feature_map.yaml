@@ -1,0 +1,33 @@
+# 기능 매핑(검증자 지정) — 함수를 SW 기능 묶음으로 나눈다. 분석 결과 out/feature_map_suggested.yaml을 참고해 고친다.
+# 우선순위: overrides > functions(함수 이름) > paths(경로) > swcs(SWC 전용 함수) > structure 규칙 > 자동(AUTOSAR·폴더·파일)
+features:
+  - id: TORQUE_LIMIT
+    name: 속도 조건 토크 제한
+    swcs: [SWC_Torque]               # SWC_Torque의 Runnable에서만 호출되는 함수(아래 paths에 걸리지 않는 것)
+    tests:
+      - TC_TQ_010 차속 30~39 km/h 토크 제한 경계값
+      - TC_TQ_020 센서 고장 시 제한 해제
+  - id: OUTPUT
+    name: 토크 출력·고장 차단
+    paths: [src/output.c]
+    tests:
+      - TC_OUT_010 센서 고장 시 출력 0 차단
+      - TC_OUT_020 PWM 듀티 레지스터 범위
+  - id: SENSOR_DIAG
+    name: 차속 센서 진단(DTC)
+    paths: [src/diag.c]
+    tests:
+      - TC_DIAG_010 고장 디바운스 5회
+      - TC_DIAG_020 토크 제한 타당성 DTC
+  - id: SPEED
+    name: 차속 수신·필터
+    paths: [src/speed.c, src/filter.c]
+    tests:
+      - TC_SPD_010 최대 차속 제한
+      - TC_SPD_020 필터 응답
+  - id: PLATFORM
+    name: 태스크·디버그
+    paths: [src/os_tasks.c, src/debug.c]
+# structure: ['AP/Function/{feature}/**']   # 폴더 구조 규칙(실제 프로젝트용)
+# ignore: ['**/Test/**']
+# overrides: {Dbg_ReadCounter: PLATFORM}    # 함수 하나씩 바로잡기

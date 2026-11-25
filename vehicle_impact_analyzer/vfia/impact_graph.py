@@ -283,6 +283,28 @@ def _impact_side(g: AnalysisGraph, A: Abstraction, fs, chops: Dict[str, object],
     return nodes, edges
 
 
+def change_centers(ch: dict, go: AnalysisGraph, gn: AnalysisGraph, seeds_abs: Set[str]) -> Set[str]:
+    """변경이 직접 일어난 함수·변수(표시 단위). 시작점이 속한 함수·변수에 변경 단위의 종류별 대상을 더한다."""
+    centers = set(seeds_abs)
+    for u in (ch.get("unit_old"), ch.get("unit_new")):
+        for g in (go, gn):
+            if not u or not g.has_node(u):
+                continue
+            k = g.kind(u)
+            if k == NK.FUNCTION:
+                centers.add(u)
+            elif k == NK.TASK:          # 태스크·ISR 설정 변경: 그 문맥에서 실행되는 함수
+                centers |= set(g.succ(u, [EK.ACTIVATES]))
+            elif k == NK.MACRO:         # 매크로 변경: 그 매크로를 쓰는 함수
+                centers |= {g.func_of(x) or (x if g.kind(x) == NK.FUNCTION else None)
+                            for x in g.pred(u, [EK.USES_MACRO])} - {None}
+            elif k in (NK.RECORD, NK.TYPEDEF):   # 자료형 변경: 그 자료형을 쓰는 함수
+                centers |= {x for x in g.pred(u, [EK.USES_TYPE]) if g.kind(x) == NK.FUNCTION}
+            elif k == NK.GLOBAL:        # 전역 변수 선언·초기값 변경: 그 변수의 메모리 위치
+                centers |= {l for l in g.nodes_of(NK.LOCATION) if g.node(l).get("root") == u}
+    return {c for c in centers if not c.startswith("obs:")}
+
+
 def _dijkstra(adj: Dict[str, List[Tuple[str, float]]], sources: Iterable[str], limit: float = 1e9) -> Dict[str, float]:
     dist: Dict[str, float] = {}
     pq = [(0.0, s) for s in sources]
@@ -365,24 +387,7 @@ def build_graph_data(go: AnalysisGraph, gn: AnalysisGraph, results: List[dict], 
                 m["on_path"] |= d["on_path"]
                 m["side"] |= bit
         # 변경 함수 단위 대상(함수 그래프의 중심): 변경 단위 + 시작점이 속한 함수·변수
-        centers = set(seeds_abs)
-        for u in (ch.get("unit_old"), ch.get("unit_new")):
-            for g in (go, gn):
-                if not u or not g.has_node(u):
-                    continue
-                k = g.kind(u)
-                if k == NK.FUNCTION:
-                    centers.add(u)
-                elif k == NK.TASK:          # 태스크·ISR 설정 변경: 그 문맥에서 실행되는 함수
-                    centers |= set(g.succ(u, [EK.ACTIVATES]))
-                elif k == NK.MACRO:         # 매크로 변경: 그 매크로를 쓰는 함수
-                    centers |= {g.func_of(x) or (x if g.kind(x) == NK.FUNCTION else None)
-                                for x in g.pred(u, [EK.USES_MACRO])} - {None}
-                elif k in (NK.RECORD, NK.TYPEDEF):   # 자료형 변경: 그 자료형을 쓰는 함수
-                    centers |= {x for x in g.pred(u, [EK.USES_TYPE]) if g.kind(x) == NK.FUNCTION}
-                elif k == NK.GLOBAL:        # 전역 변수 선언·초기값 변경: 그 변수의 메모리 위치
-                    centers |= {l for l in g.nodes_of(NK.LOCATION) if g.node(l).get("root") == u}
-        centers = {c for c in centers if not c.startswith("obs:")}
+        centers = change_centers(ch, go, gn, seeds_abs)
         changed_nodes[cid] = sorted(centers)
         chg = f"chg:{cid}"
         merged_n.setdefault(chg, {"on_path": False, "side": 3})
@@ -610,6 +615,15 @@ def export_views(data: dict) -> Dict[str, Tuple[List[dict], List[dict]]]:
     es = [{"source": s, "target": t, "kind": k, "control": bool(c), "count": cnt, "label": lab, "status": st}
           for s, t, k, c, side, cnt, lab, st in data["program"]["e"]]
     views["functions"] = (ns, es)
+    fu = data.get("feature_units")
+    if fu:
+        ns = [{"id": n["id"], "label": n["name"], "kind": "feature", "functions_old": n["n_old"], "functions_new": n["n_new"]}
+              for n in fu["nodes"]]
+        es = [{"source": a, "target": b, "kind": "feature", "calls_old": c[0], "calls_new": c[1], "vars_old": v[0],
+               "vars_new": v[1], "signals_old": sg[0], "signals_new": sg[1], "status": st,
+               "label": f"호출 {c[1]} · 변수 {v[1]} · 신호 {sg[1]}", "evidence": ev}
+              for a, b, c, v, sg, st, ev in fu["edges"]]
+        views["features"] = (ns, es)
     for gran, mg in data["modules"].items():
         ns = [{"id": m, "label": m, "kind": "module", "functions_old": o, "functions_new": n, "changed": bool(ch),
                "risk": r, "status": st} for m, o, n, ch, r, st in mg["n"]]

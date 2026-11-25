@@ -51,6 +51,13 @@ details>summary{cursor:pointer;font-weight:600;margin:4px 0}.path{margin:4px 0 8
 .pill{display:inline-block;background:var(--code);border-radius:4px;padding:0 6px;margin:1px 2px;font-size:12px}
 .summary-cards{display:flex;flex-wrap:wrap;gap:10px}.summary-cards .card{flex:1 1 220px;margin:0}
 .big{font-size:22px;font-weight:700}ul{margin:4px 0;padding-left:20px}
+body.ig-wide main{max-width:none}
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--bd);margin:14px 0 0;position:sticky;top:0;background:var(--bg);z-index:5}
+.tabs a{padding:8px 16px;text-decoration:none;color:var(--mut);font-weight:600;border:1px solid transparent;border-bottom:none;
+  border-radius:8px 8px 0 0;margin-bottom:-1px}
+.tabs a.on{color:var(--fg);background:var(--card);border-color:var(--bd)}
+.flash{outline:3px solid var(--acc);outline-offset:2px;transition:outline-color 1.5s}
+.ig-link{font-size:12px;margin-left:8px}
 """
 
 
@@ -234,7 +241,8 @@ def _behavior_html(checks: List[dict]) -> str:
 
 
 def impact_report_html(data: dict, path: str, graph: Optional[dict] = None, exported: Optional[List[str]] = None,
-                       export_dir_rel: str = "graph_export") -> None:
+                       export_dir_rel: str = "graph_export", feature: Optional[dict] = None,
+                       feature_files: Optional[List[str]] = None) -> None:
     """검토 보고서. graph(impact_graph.build_graph_data 결과)가 있으면 '영향 그래프' 탭을 더한다."""
     meta = data["meta"]
     changes = data["changes"]
@@ -243,6 +251,11 @@ def impact_report_html(data: dict, path: str, graph: Optional[dict] = None, expo
          f"{_e(meta.get('generated'))}</p>"]
     feats = data.get("features", [])
     cards = [f"<div class='card'><div class='mut'>변경점</div><div class='big'>{len(changes)}</div></div>"]
+    if feature:
+        fs = feature["summary"]
+        cards.append(f"<div class='card'><div class='mut'>영향받는 기능</div><div class='big'>{fs['affected']}개</div>"
+                     f"<div class='mut'>변경 {fs['changed']} · 직접 {fs['direct']} · 간접 {fs['indirect']}"
+                     f" · 외부 출력 {fs['outputs']}</div><a href='#feature'>기능 영향 보기</a></div>")
     for f in feats:
         cards.append(f"<div class='card'><div class='mut'>{_e(f['feature'])}</div><div><b>{_e(f['name'])}</b></div>"
                      f"<div>{badge(f['overall'])}</div><div class='mut'>관련 변경 {len(f['changes'])}개</div></div>")
@@ -459,12 +472,23 @@ def impact_report_html(data: dict, path: str, graph: Optional[dict] = None, expo
     b.append("<h2>4. 검증자는 무엇을 추가로 확인해야 하는가?</h2>")
     for sec in data.get("review", []):
         b.append(f"<h3>{_e(sec['title'])}</h3><ul>" + "".join(f"<li>{_e(x)}</li>" for x in sec["items"]) + "</ul>")
+    tabs = [("report", "보고서", "".join(b[1:]))]
+    if feature:
+        from .feature_impact import feature_tab_html
+        tabs.append(("feature", "기능 영향", feature_tab_html(feature, feature_files)))
     if graph:
         from .impact_graph import graph_tab_html
-        body = (b[0] + "<nav class='tabs' role='tablist'><a id='tabbtn-report' class='on' href='#report' role='tab'>보고서</a>"
-                "<a id='tabbtn-graph' href='#graph' role='tab'>영향 그래프</a></nav>"
-                "<section id='tab-report' role='tabpanel'>" + "".join(b[1:]) + "</section>"
-                "<section id='tab-graph' role='tabpanel' hidden>" + graph_tab_html(graph, export_dir_rel, exported) + "</section>")
+        tabs.append(("graph", "영향 그래프", graph_tab_html(graph, export_dir_rel, exported)))
+    if len(tabs) > 1:
+        here = os.path.dirname(os.path.abspath(__file__))
+        with open(os.path.join(here, "report_assets", "tabs.js"), "r", encoding="utf-8") as fh:
+            tabs_js = fh.read()
+        nav = "<nav class='tabs' role='tablist'>" + "".join(
+            f"<a id='tabbtn-{k}' data-tab='{k}' class='{'on' if i == 0 else ''}' href='#{k}' role='tab'>{_e(label)}</a>"
+            for i, (k, label, _) in enumerate(tabs)) + "</nav>"
+        body = (b[0] + nav + "<script>" + tabs_js.replace("</script", "<\\/script") + "</script>" + "".join(
+            f"<section id='tab-{k}' role='tabpanel'{'' if i == 0 else ' hidden'}>{content}</section>"
+            for i, (k, _, content) in enumerate(tabs)))
     else:
         body = "".join(b)
     with open(path, "w", encoding="utf-8") as fh:

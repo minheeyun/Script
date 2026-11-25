@@ -8,18 +8,22 @@
   var COST = D.step_cost || { call: 1, shared: 0.5, signal: 0.5, observe: 0.5, change: 0 };
   var KIND_LABEL = { change: '변경', function: '함수', external: '외부 함수(본문 없음)', variable: '변수',
     register: '레지스터(MMIO)', signal: '신호', observation: '관찰 대상(기능 출력)', module: '모듈', cluster: '묶음' };
-  var EDGE_LABEL = { call: '호출·반환', shared: '공유 변수', signal: '신호', observe: '관찰', change: '변경 지점', module: '모듈 의존' };
+  var EDGE_LABEL = { call: '호출·반환', shared: '공유 변수', signal: '신호', observe: '관찰', change: '변경 지점', module: '모듈 의존',
+    feature: '기능 의존' };
+  var FU = D.feature_units || null;
+  var STAGE_LABEL = function (sg) { return sg === 0 ? '변경 기능' : (sg === 1 ? '직접 영향(1단계)' : '간접 영향(' + sg + '단계)'); };
   var STATUS_LABEL = { added: '추가(변경 후에만 있음)', removed: '삭제(변경 전에만 있음)', same: '전후 모두 있음',
     changed: '호출·공유 수가 바뀜' };
   var RISK_LABEL = { 2: '높음 — 동작 차이가 확인된 기능의 출력까지 가는 근거 경로 위',
     1: '보통 — 정적 영향 후보 기능의 출력까지 가는 근거 경로 위' };
   var CTRL_TEXT = { impact: '제어 조건(변경 영향이 조건문을 거쳐 전달)', program: '제어 조건(조건문 안의 호출·접근)',
+    feature: '제어 조건(기능 그래프에서는 표시 안 함)',
     module: '제어 조건(조건부 호출 포함)' };
   var KIND_ORDER = { change: 0, function: 1, external: 2, variable: 3, register: 3, signal: 4, observation: 5, cluster: 6, module: 1 };
 
   var st = {
-    type: 'impact', change: D.changes.length ? D.changes[0].id : null, steps: { impact: null, program: 2 },
-    view: 'compare', pathOnly: false, vars: true, gran: 'file', layout: { impact: 'layered', program: 'layered', module: 'cose' },
+    type: 'impact', change: D.changes.length ? D.changes[0].id : null, steps: { impact: null, program: 2, feature: null },
+    view: 'compare', pathOnly: false, vars: true, gran: 'file', layout: { impact: 'layered', program: 'layered', module: 'cose', feature: 'layered' },
     cluster: true, th: D.cluster_threshold || 150, expanded: {}, path: null, sel: null, minw: null
   };
   var cy = null, lastModel = null, inited = false;
@@ -30,49 +34,18 @@
     });
   };
 
-  // ------------------------------------------------------------------ 탭·이동
-  function showTab(name) {
-    var g = name === 'graph';
-    var wasHidden = $('tab-graph').hidden;
-    $('tab-report').hidden = g;
-    $('tab-graph').hidden = !g;
-    document.body.classList.toggle('ig-wide', g);
-    $('tabbtn-report').classList.toggle('on', !g);
-    $('tabbtn-graph').classList.toggle('on', g);
-    if (g) {
-      if (wasHidden) { document.querySelector('.tabs').scrollIntoView({ block: 'start' }); }
-      if (!inited) { init(); } else if (cy) { cy.resize(); }
-    }
-  }
-  function flash(el) {
-    el.classList.add('flash');
-    setTimeout(function () { el.classList.remove('flash'); }, 1800);
-  }
-  function goCard(id) {
-    if (location.hash === '#' + id) { route(); } else { location.hash = id; }
-  }
-  function route() {
-    var h = decodeURIComponent(location.hash.replace(/^#/, ''));
-    if (h === 'graph' || h.indexOf('graph:') === 0) {
-      var parts = h.split(':');
-      if (parts[1] && (CHG[parts[1]] || parts[1] === '*')) { st.change = parts[1]; st.path = null; st.sel = null; }
-      if (parts[2] && /^(impact|program|module)$/.test(parts[2])) { st.type = parts[2]; }
-      showTab('graph');
-      if (inited) { syncControls(); render(true); }
-      return;
-    }
-    showTab('report');
-    if (h) {
-      var el = document.getElementById(h);
-      if (el) {
-        var d = el.closest('details');
-        while (d) { d.open = true; d = d.parentElement && d.parentElement.closest('details'); }
-        el.scrollIntoView({ block: 'start' });
-        flash(el);
-      }
-    }
-  }
-  window.addEventListener('hashchange', route);
+  // ------------------------------------------------------------------ 탭·이동(tabs.js)
+  var TABS = window.vfiaTabs;
+  function goCard(id) { TABS.go(id); }
+  TABS.onShow('graph', function () {
+    if (!inited) { init(); } else if (cy) { cy.resize(); }
+  });
+  TABS.onRoute('graph', function (parts) {
+    if (parts[0] && (CHG[parts[0]] || parts[0] === '*')) { st.change = parts[0]; st.path = null; st.sel = null; }
+    if (parts[1] && /^(impact|program|module|feature)$/.test(parts[1])) { st.type = parts[1]; }
+    if (inited) { syncControls(); render(true); }
+  });
+  TABS.hashFor.graph = function () { return st.change ? ':' + st.change : ''; };
 
   // ------------------------------------------------------------------ 색
   function cssVar(v, fb) {
@@ -293,7 +266,7 @@
   }
   function clusterModel(model) {
     model.clusters = 0; model.hidden = 0;
-    if (model.kind === 'module' || !st.cluster || model.nodes.length <= st.th) return model;
+    if (model.kind === 'module' || model.kind === 'feature' || !st.cluster || model.nodes.length <= st.th) return model;
     var ps = pathSet();
     // 1순위(항상 따로): 변경·변경 대상·출력·강조한 경로·펼친 묶음
     var tierA = function (n) {
@@ -380,23 +353,25 @@
         setIdx(c);
       });
     }
-    // 열 안에서는 노드 높이만큼 쌓고(겹치지 않게), 한 열이 너무 길면 옆으로 나눠 놓는다
-    var pos = {}, x = 0, GAP = 22, PER = 22;
-    colKeys.forEach(function (c) {
+    // 열 안에서는 노드 높이만큼 쌓고(겹치지 않게), 한 열이 너무 길면 옆으로 나눠 놓는다.
+    // 열 사이는 앞 열 폭의 절반 + 간격 + 이번 열 폭의 절반만큼 띄워 넓은 노드도 옆 열과 겹치지 않게 한다.
+    var pos = {}, x = 0, prevHalf = 0, GAP = 22, HGAP = 46, PER = 22;
+    colKeys.forEach(function (c, ci) {
       var list = cols[c], sub = Math.ceil(list.length / PER), maxW = 0;
       list.forEach(function (n) { maxW = Math.max(maxW, (sizes[n.id] || {}).w || 120); });
-      var colW = maxW + 48;
+      var span = maxW + (sub - 1) * (maxW + HGAP);      // 하위 열 포함 전체 폭
+      x += ci === 0 ? span / 2 : prevHalf + HGAP + span / 2;
       for (var k = 0; k < sub; k++) {
         var part = list.slice(k * PER, (k + 1) * PER), total = 0;
         part.forEach(function (n) { total += ((sizes[n.id] || {}).hh || 40) + GAP; });
-        var y = -total / 2;
+        var y = -total / 2, cx = x - span / 2 + maxW / 2 + k * (maxW + HGAP);
         part.forEach(function (n) {
           var hh = (sizes[n.id] || {}).hh || 40;
-          pos[n.id] = { x: x + k * colW * 0.75, y: y + hh / 2 };
+          pos[n.id] = { x: cx, y: y + hh / 2 };
           y += hh + GAP;
         });
       }
-      x += colW + (sub - 1) * colW * 0.75;
+      prevHalf = span / 2;
     });
     return pos;
   }
@@ -416,6 +391,9 @@
       { selector: 'node[k = "external"]', style: { 'shape': 'cut-rectangle', 'background-color': P.out } },
       { selector: 'node[k = "cluster"]', style: { 'background-color': P.cl, 'border-style': 'dashed', 'border-width': 1.5, 'color': P.mut } },
       { selector: 'node[k = "module"]', style: { 'width': 'data(w)', 'height': 'data(h)' } },
+      { selector: 'node[k = "feature"]', style: { 'font-weight': 'bold', 'font-size': 12, 'border-width': 2 } },
+      { selector: 'node[aff = 0]', style: { 'opacity': 0.4 } },
+      { selector: 'edge[dimE = 1]', style: { 'opacity': 0.3 } },
       { selector: 'node[s = "added"]', style: { 'border-style': 'dashed', 'border-color': P.add, 'border-width': 2.5 } },
       { selector: 'node[s = "removed"]', style: { 'border-style': 'dashed', 'border-color': P.rem, 'border-width': 2.5, 'opacity': 0.75 } },
       { selector: 'node[risk = 1]', style: { 'border-color': P.r1, 'border-width': 3.5 } },
@@ -447,8 +425,73 @@
     ];
   }
 
+  // ------------------------------------------------------------------ 기능 의존·영향
+  function featureModel() {
+    if (!FU) return { kind: 'feature', nodes: [], edges: [], maxSteps: 1, steps: 1, note: '기능 영향 데이터 없음(--no-feature로 생략됨)' };
+    var cid = st.change;
+    var list = cid && cid !== '*' && FU.changes[cid] ? [FU.changes[cid]] : Object.keys(FU.changes).map(function (k) { return FU.changes[k]; });
+    var stage = {}, hops = {}, outs = {};
+    list.forEach(function (c) {
+      Object.keys(c.stage).forEach(function (f) { stage[f] = Math.min(stage[f] === undefined ? 99 : stage[f], c.stage[f]); });
+      c.hops.forEach(function (h) { hops[h[0] + '\u0001' + h[1]] = h; });
+      c.outputs.forEach(function (o) { outs[o[0]] = o; });
+    });
+    var maxS = 0;
+    Object.keys(stage).forEach(function (f) { maxS = Math.max(maxS, stage[f]); });
+    var maxSteps = Math.max(1, maxS);
+    var steps = st.steps.feature == null ? maxSteps : Math.min(st.steps.feature, maxSteps);
+    var nodes = [], ids = {};
+    FU.nodes.forEach(function (n) {
+      var sg = stage[n.id];
+      if (st.view === 'after' && !n.n_new) return;
+      if (st.view === 'before' && !n.n_old) return;
+      if (sg === undefined && (st.pathOnly || steps < maxSteps)) return;
+      if (sg !== undefined && sg > steps) return;
+      var fn = st.view === 'before' ? n.n_old : (st.view === 'after' || n.n_old === n.n_new ? n.n_new : n.n_old + '→' + n.n_new);
+      nodes.push({ id: 'feat:' + n.id, label: n.id + (n.name !== n.id ? '\n' + n.name : '') + '\n함수 ' + fn, k: 'feature', m: n.id,
+        s: !n.n_old && n.n_new ? 'added' : (n.n_old && !n.n_new ? 'removed' : 'same'), changed: sg === 0,
+        risk: sg === 1 ? 2 : (sg >= 2 ? 1 : 0), dist: sg === undefined ? maxS + 2 : sg, stage: sg, aff: sg !== undefined ? 1 : 0,
+        fo: n.n_old, fn: n.n_new });
+      ids['feat:' + n.id] = 1;
+    });
+    var edges = [];
+    FU.edges.forEach(function (r) {
+      var s = 'feat:' + r[0], t = 'feat:' + r[1];
+      if (!ids[s] || !ids[t]) return;
+      var o = r[2][0] + r[3][0] + r[4][0], nn = r[2][1] + r[3][1] + r[4][1];
+      if (st.view === 'after' && !nn) return;
+      if (st.view === 'before' && !o) return;
+      var i = st.view === 'before' ? 0 : 1;
+      var parts = [];
+      if (r[2][i]) parts.push('호출 ' + r[2][i]);
+      if (r[3][i]) parts.push('변수 ' + r[3][i]);
+      if (r[4][i]) parts.push('신호 ' + r[4][i]);
+      var hop = hops[r[0] + '\u0001' + r[1]];
+      edges.push({ s: s, t: t, k: r[2][i] ? 'call' : (r[3][i] ? 'shared' : 'signal'), ctrl: 0, onp: hop ? 1 : 0,
+        cnt: Math.max(o, nn), lab: hop ? hop[2] : parts.join(' · '), status: r[5], ev: r[6], hop: hop });
+    });
+    Object.keys(hops).forEach(function (key) {   // 의존 행렬에 없는 전파(슬라이스 근거)는 따로
+      var h = hops[key], s = 'feat:' + h[0], t = 'feat:' + h[1];
+      if (!ids[s] || !ids[t]) return;
+      if (edges.some(function (e) { return e.s === s && e.t === t; })) return;
+      edges.push({ s: s, t: t, k: 'shared', ctrl: 0, onp: 1, cnt: h[3], lab: h[2], status: 'same', hop: h });
+    });
+    Object.keys(outs).forEach(function (id) {
+      var o = outs[id], from = o[3].filter(function (f) { return ids['feat:' + f]; });
+      if (!from.length) return;
+      var oid = 'out:' + id, ms = 99;
+      from.forEach(function (f) { ms = Math.min(ms, stage[f] === undefined ? 99 : stage[f]); });
+      nodes.push({ id: oid, label: o[2], k: o[1].indexOf('신호') >= 0 ? 'signal' : (o[1] === '레지스터' ? 'register' : 'observation'),
+        m: '(외부 출력)', s: 'same', risk: 0, changed: false, dist: maxS + 1, aff: 1, okind: o[1], ostage: ms });
+      from.forEach(function (f) { edges.push({ s: 'feat:' + f, t: oid, k: o[1].indexOf('신호') >= 0 ? 'signal' : 'observe', ctrl: 0, onp: 1, cnt: 1, lab: o[1], status: 'same' }); });
+    });
+    return { kind: 'feature', nodes: nodes, edges: edges, maxSteps: maxSteps, steps: steps, stage: stage,
+      note: '영향받는 기능 ' + Object.keys(stage).length + '개 / 전체 ' + FU.nodes.length + '개' };
+  }
+
   function buildModel() {
-    var m = st.type === 'impact' ? impactModel() : (st.type === 'program' ? programModel() : moduleModel());
+    var m = st.type === 'impact' ? impactModel() : (st.type === 'program' ? programModel()
+      : (st.type === 'feature' ? featureModel() : moduleModel()));
     return clusterModel(m);
   }
 
@@ -469,7 +512,8 @@
         sz = { w: Math.max(sz.w, 40 + Math.sqrt(f) * 14), h: Math.max(sz.h, 30 + Math.sqrt(f) * 6) };
       }
       els.push({ group: 'nodes', data: { id: n.id, label: n.label, k: n.k, risk: n.risk || 0, changed: n.changed ? 1 : 0,
-        s: st.view === 'compare' ? (n.s || 'same') : 'same', dist: n.dist, m: n.m, w: sz.w, h: sz.h, wd: sz.w + 26, hd: sz.h + 18 } });
+        s: st.view === 'compare' ? (n.s || 'same') : 'same', dist: n.dist, m: n.m, w: sz.w, h: sz.h, wd: sz.w + 26, hd: sz.h + 18,
+        aff: n.aff == null ? 1 : n.aff } });
     });
     (model.folders || []).forEach(function (f) {
       els.push({ group: 'nodes', data: { id: 'fold:' + f, label: f + '/', k: 'folder', m: f, w: 10, h: 10, risk: 0, changed: 0, s: 'same' } });
@@ -479,7 +523,8 @@
       els.push({ group: 'edges', data: { id: 'e' + i, source: e.s, target: e.t, k: e.k, mod: model.kind === 'module' ? 1 : 0,
         ek: model.kind === 'module' ? 'module' : e.k, ctrl: e.ctrl ? 1 : 0, onp: e.onp ? 1 : 0, label: e.lab || '', cnt: e.cnt || 1,
         status: st.view === 'compare' ? (e.status || 'same') : 'same',
-        mw: 1.2 + 6 * Math.sqrt((e.cnt || 1) / maxCnt) } });
+        mw: 1.2 + 6 * Math.sqrt((e.cnt || 1) / maxCnt),
+        dimE: model.kind === 'feature' && st.change !== '*' && !e.onp ? 1 : 0 } });
     });
     var vp = cy && fit === false ? { zoom: cy.zoom(), pan: cy.pan() } : null;
     if (cy) { cy.destroy(); }
@@ -651,11 +696,27 @@
         if (act === 'graph') { st.change = b.getAttribute('data-cid'); st.type = 'impact'; st.path = null; syncControls(); render(true); return; }
         if (act === 'expand') { st.expanded[b.getAttribute('data-m')] = true; st.sel = null; render(false); return; }
         if (act === 'center') { st.change = b.getAttribute('data-cid'); st.type = 'program'; syncControls(); render(true); }
+        if (act === 'feat') { goCard('feature:' + b.getAttribute('data-cid')); }
       });
     });
   }
   function showOverview() {
     var h = '';
+    if (st.type === 'feature') {
+      var cid0 = st.change === '*' ? null : st.change;
+      h = '<h4>기능 의존·영향 그래프</h4><p class="mut">노드 = 기능(함수 묶음), 선 = 기능 사이 호출(실선)·공유 변수/신호(점선). ' +
+        '빨강 = 변경 기능, 주황 = 직접 영향(1단계), 노랑 = 간접 영향(2단계 이상), 흐린 노드 = 영향 없음. 오른쪽 끝은 외부 출력.</p>';
+      if (FU && cid0 && FU.changes[cid0]) {
+        var c0 = FU.changes[cid0];
+        h += '<h4>' + esc(cid0) + ' 전파</h4><ul>' + c0.hops.map(function (x) {
+          return '<li><b>' + esc(x[0]) + '</b> → <b>' + esc(x[1]) + '</b>: ' + esc(x[2]) + (x[3] > 1 ? ' <span class="mut">(근거 ' + x[3] + ')</span>' : '') + '</li>';
+        }).join('') + '</ul>';
+        h += '<button data-act="feat" data-cid="' + esc(cid0) + '">기능 영향 탭에서 보기</button>';
+      }
+      $('ig-side').innerHTML = h;
+      bindSide();
+      return;
+    }
     if (st.type === 'module') {
       h = '<h4>모듈 의존 그래프</h4><p class="mut">노드 크기 = 함수 수, 선 굵기 = 호출 수 + 공유 변수 수. 호출이 있으면 실선, 공유 변수만 있으면 점선. ' +
         '변경이 있는 모듈은 빨강, 위험 후보 함수가 있는 모듈은 주황 테두리.</p>';
@@ -687,6 +748,10 @@
   }
   function showNode(n) {
     var id = n.id(), k = n.data('k'), h = '';
+    if (k === 'feature' || id.indexOf('out:') === 0) {
+      showFeatureNode(n);
+      return;
+    }
     if (k === 'change') {
       var c = CHG[id.slice(4)];
       h = '<h4>' + esc(c.id) + ' · ' + esc(c.type) + '</h4><div>' + esc(c.summary) + '</div>' +
@@ -759,14 +824,55 @@
     }
     $('ig-side').innerHTML = h;
   }
+  function showFeatureNode(n) {
+    var id = n.id(), h = '';
+    var model = lastModel || {};
+    if (id.indexOf('out:') === 0) {
+      var mo = (model.nodes || []).filter(function (x) { return x.id === id; })[0] || {};
+      h = '<h4>' + esc(n.data('label')) + '</h4><div class="mut">외부 출력 · ' + esc(mo.okind || '') + '</div><div>보내는 기능: ' +
+        n.incomers('edge').map(function (e) { return esc(e.source().data('m')); }).join(', ') + '</div>';
+      $('ig-side').innerHTML = h;
+      return;
+    }
+    var F = n.data('m'), sg = (model.stage || {})[F];
+    var info = (FU.nodes.filter(function (x) { return x.id === F; })[0]) || {};
+    h = '<h4>' + esc(F) + '</h4>' + (info.name && info.name !== F ? '<div>' + esc(info.name) + '</div>' : '') +
+      '<div class="kv" style="margin-top:6px"><div>영향</div><div>' + (sg === undefined ? '영향 없음' : esc(STAGE_LABEL(sg))) + '</div>' +
+      '<div>함수(전 → 후)</div><div>' + info.n_old + ' → ' + info.n_new + '</div></div>';
+    var ins = [], outsE = [];
+    Object.keys(FU.changes).forEach(function (cid) {
+      if (st.change !== '*' && cid !== st.change) return;
+      FU.changes[cid].hops.forEach(function (x) {
+        if (x[1] === F) ins.push([cid, x]);
+        if (x[0] === F) outsE.push([cid, x]);
+      });
+    });
+    if (ins.length) {
+      h += '<h4 style="margin-top:10px">영향이 들어온 근거</h4><ul>' + ins.slice(0, 20).map(function (r) {
+        return '<li>' + esc(r[0]) + ': <b>' + esc(r[1][0]) + '</b> → ' + esc(r[1][2]) + '</li>';
+      }).join('') + '</ul>';
+    }
+    if (outsE.length) {
+      h += '<h4>영향이 나간 근거</h4><ul>' + outsE.slice(0, 20).map(function (r) {
+        return '<li>' + esc(r[0]) + ': → <b>' + esc(r[1][1]) + '</b> ' + esc(r[1][2]) + '</li>';
+      }).join('') + '</ul>';
+    }
+    var outs = (FU.outputs || {})[F] || [];
+    if (outs.length) h += '<h4>이 기능의 외부 출력</h4><div class="mut">' + esc(outs.join(', ')) + '</div>';
+    h += '<div style="margin-top:8px"><button data-act="feat" data-cid="' + esc(st.change === '*' ? '' : st.change) + '">기능 영향 탭에서 보기</button></div>';
+    $('ig-side').innerHTML = h;
+    bindSide();
+  }
   function nameOf(n) {
     if (n.data('k') === 'change') return n.id().slice(4);
-    if (n.data('k') === 'module' || n.data('k') === 'cluster') return n.data('m');
+    if (n.data('k') === 'module' || n.data('k') === 'cluster' || n.data('k') === 'feature') return n.data('m');
+    if (n.id().indexOf('out:') === 0) return n.data('label');
     return (NODES[n.id()] || {}).l || n.id();
   }
   function navigateFrom(n) {
     var id = n.id(), k = n.data('k');
     if (k === 'change') { goCard(id.slice(4)); return; }
+    if (k === 'feature' || id.indexOf('out:') === 0) { goCard('feature' + (st.change && st.change !== '*' ? ':' + st.change : '')); return; }
     if (k === 'cluster') return;
     var refs = allPaths().filter(function (r) {
       return r.p.nodes.indexOf(id) >= 0 && (st.type !== 'impact' || r.cid === st.change);
@@ -859,7 +965,8 @@
     if (allOpt) allOpt.disabled = st.type === 'impact';
     sel.value = st.change;
     $('ig-change-l').style.display = st.type === 'module' ? 'none' : '';
-    $('ig-pathonly-l').style.display = st.type === 'impact' ? '' : 'none';
+    $('ig-pathonly-l').style.display = st.type === 'impact' || st.type === 'feature' ? '' : 'none';
+    $('ig-pathonly-t').textContent = st.type === 'feature' ? '영향받는 기능만' : '출력까지 가는 경로만';
     $('ig-vars-l').style.display = st.type === 'program' ? '' : 'none';
     $('ig-gran-l').style.display = st.type === 'module' ? '' : 'none';
     $('ig-minw-l').style.display = st.type === 'module' ? '' : 'none';
@@ -871,7 +978,8 @@
   function init() {
     inited = true;
     var sel = $('ig-change');
-    sel.innerHTML = '<option value="*">전체 변경(함수 의존 그래프용)</option>' + D.changes.map(function (c) {
+    if (!FU) { var fo = $('ig-type').querySelector('option[value="feature"]'); if (fo) fo.remove(); }
+    sel.innerHTML = '<option value="*">전체 변경(함수·기능 그래프용)</option>' + D.changes.map(function (c) {
       return '<option value="' + esc(c.id) + '">' + esc(c.id + ' ' + (c.type || '') + ' · ' + (c.unit || '')) + '</option>';
     }).join('');
     if (typeof cytoscape !== 'function') {
@@ -916,11 +1024,4 @@
   window.vfiaGraph = { state: st, render: render, model: function () { return lastModel; }, cy: function () { return cy; },
     toDot: function () { return toDot(); }, toGraphML: function () { return toGraphML(); }, go: goCard };
 
-  $('tabbtn-report').addEventListener('click', function (ev) { ev.preventDefault(); history.pushState(null, '', '#report'); showTab('report'); });
-  $('tabbtn-graph').addEventListener('click', function (ev) {
-    ev.preventDefault();
-    history.pushState(null, '', '#graph' + (st.change ? ':' + st.change : ''));
-    showTab('graph');
-  });
-  route();
 })();

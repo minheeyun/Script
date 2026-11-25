@@ -109,6 +109,7 @@ class AnalysisConfig:
     traces: Dict[str, str] = field(default_factory=dict)
     history: Dict[str, Any] = field(default_factory=dict)      # 공변경 마이닝 입력(git 저장소 또는 JSON)
     ground_truth: Optional[str] = None                          # 평가용 정답셋
+    feature_map: Optional[str] = None                           # 함수 → 기능 매핑 파일(기능 영향 탭)
 
     @property
     def base_dir(self) -> str:
@@ -196,4 +197,5 @@ def load_config(path: str) -> AnalysisConfig:
         traces=traces,
         history={k: (_abs(base, v) if k in ("git", "file") else v) for k, v in (raw.get("history") or {}).items()},
         ground_truth=_abs(base, raw.get("ground_truth")),
+        feature_map=_abs(base, raw.get("feature_map")),
     )

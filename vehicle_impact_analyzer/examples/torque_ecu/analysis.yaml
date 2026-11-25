@@ -32,6 +32,7 @@ analysis:
 output_dir: out
 review_file: feature_review.yaml   # 검토자가 기능 연결을 확정/기각한 기록(선택)
 ground_truth: ground_truth.yaml    # 평가용 정답셋(evaluate.py)
+feature_map: feature_map.yaml      # 함수 → 기능 매핑(보고서 '기능 영향' 탭)
 traces:                            # Software Reconnaissance용 실행 추적(예시 데이터)
   scn_speed_limit: traces/scn_speed_limit.json
   scn_sensor_fault: traces/scn_sensor_fault.json

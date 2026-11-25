@@ -64,7 +64,8 @@ def main(argv=None) -> int:
             return r.returncode
         print(f"--- {name} 완료 ({time.time() - t0:.1f}초)")
     print("\n산출물:")
-    for f in (f"features_{a.after}.html", "impact.html", "evaluation.md", "impact_mvp.json"):
+    for f in (f"features_{a.after}.html", "impact.html", "feature_regression_scope.csv", "feature_map_suggested.yaml",
+              "evaluation.md", "impact_mvp.json"):
         p = os.path.join(out, f)
         if os.path.isfile(p):
             print(f"  {p}")

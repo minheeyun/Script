@@ -1,11 +1,4 @@
 <style>
-body.ig-wide main{max-width:none}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--bd);margin:14px 0 0;position:sticky;top:0;background:var(--bg);z-index:5}
-.tabs a{padding:8px 16px;text-decoration:none;color:var(--mut);font-weight:600;border:1px solid transparent;border-bottom:none;
-  border-radius:8px 8px 0 0;margin-bottom:-1px}
-.tabs a.on{color:var(--fg);background:var(--card);border-color:var(--bd)}
-.flash{outline:3px solid var(--acc);outline-offset:2px;transition:outline-color 1.5s}
-.ig-link{font-size:12px;margin-left:8px}
 .ig-bar{display:flex;flex-wrap:wrap;gap:6px 14px;align-items:center;margin:12px 0 8px;font-size:13px}
 .ig-bar label{display:inline-flex;gap:6px;align-items:center;white-space:nowrap}
 .ig-bar select,.ig-bar input[type=number]{font:inherit;background:var(--card);color:var(--fg);border:1px solid var(--bd);
@@ -34,14 +27,15 @@ body.ig-wide main{max-width:none}
   <label>그래프 <select id="ig-type">
     <option value="impact">1. 변경 영향(변경 → 변수 → 함수 → 출력)</option>
     <option value="program">2. 함수 호출·데이터 의존(변경 주변 N단계)</option>
-    <option value="module">3. 모듈 의존(파일·폴더)</option></select></label>
+    <option value="module">3. 모듈 의존(파일·폴더)</option>
+    <option value="feature">4. 기능 의존·영향(기능 단위)</option></select></label>
   <label id="ig-change-l">변경 <select id="ig-change"></select></label>
   <label id="ig-steps-l" title="호출 1단계, 변수·신호를 거치는 연결은 함수→변수→함수가 1단계">단계
     <input type="range" id="ig-steps" min="1" max="4" step="1" value="2"><output id="ig-steps-v">2</output></label>
   <label>보기 <select id="ig-view"><option value="compare">변경 전·후 비교</option>
     <option value="after">변경 후만</option><option value="before">변경 전만</option></select></label>
   <label id="ig-pathonly-l" title="기능 관찰 대상(출력)까지 가는 근거 경로(chop) 위의 요소만">
-    <input type="checkbox" id="ig-pathonly"> 출력까지 가는 경로만</label>
+    <input type="checkbox" id="ig-pathonly"> <span id="ig-pathonly-t">출력까지 가는 경로만</span></label>
   <label id="ig-vars-l" title="끄면 함수 → 변수 → 함수를 함수 사이 점선 하나로 줄여 표시"><input type="checkbox" id="ig-vars" checked> 변수 노드</label>
   <label id="ig-gran-l">단위 <select id="ig-gran"><option value="file">파일</option><option value="folder">폴더</option></select></label>
   <label id="ig-minw-l" title="모듈 사이 호출 수 + 공유 변수 수가 이 값보다 작은 연결은 숨김">최소 연결 수 <input type="number" id="ig-minw" min="1" step="1" value="1"></label>
