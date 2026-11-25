@@ -31,7 +31,8 @@ GENERIC_DIRS = {"src", "source", "sources", "inc", "include", "includes", "cfg",
                 "implementation", "private", "public", "api", "lib", "core", "common"}
 TIER = {0: "변경 기능", 1: "직접 영향", 2: "간접 영향"}
 SOURCE_LABEL = {"override": "매핑 파일(개별 지정)", "map_function": "매핑 파일(함수 이름)", "map_path": "매핑 파일(경로)",
-                "map_swc": "매핑 파일(SWC)", "structure_rule": "폴더 구조 규칙", "autosar": "AUTOSAR(SWC 전용 함수)",
+                "map_swc": "매핑 파일(SWC)", "structure_rule": "폴더 구조 규칙", "autosar": "ARXML(SWC 전용 함수)",
+                "arxml_home": "ARXML(SWC Runnable이 있는 모듈 폴더)", "arxml_impl": "ARXML(SWC 구현 파일)",
                 "structure": "폴더 구조", "file": "파일 이름", "writer": "쓰는 함수의 기능"}
 _DIFF_STATUS = {Status.EXEC_DIFF, Status.MODEL_DIFF}
 
@@ -105,12 +106,76 @@ def load_feature_map(path: Optional[str]) -> dict:
 # ---------------------------------------------------------------------------
 # 함수 → 기능
 # ---------------------------------------------------------------------------
-class FeatureMapping:
-    """한 버전 그래프의 함수·변수 → 기능 매핑(근거 포함)."""
+def module_keys(files: List[str]) -> Dict[str, Tuple[str, str, str]]:
+    """소스 파일('/' 구분 상대 경로) -> (기능 이름, 근거 종류 'structure'|'file', 모듈 폴더 경로 또는 파일 이름).
 
-    def __init__(self, g: AnalysisGraph, spec: dict):
+    모든 파일에 공통인 앞 폴더는 빼고, 남은 경로에서 마지막 일반 폴더(src·inc·cfg ...) 바로 위를 모듈 폴더로 본다
+    ('AP/Function/PWM/src/sub/x.c' -> PWM). 일반 폴더 위에 아무것도 없으면 그 아래 첫 폴더('Common/Util/x.c' ->
+    Util), 일반 폴더가 없으면 파일이 있는 폴더, 그것도 없으면 파일 이름.
+    이름이 같은 다른 폴더('AP/Function/PWM'와 'BSW/Mcal/Pwm')는 위 폴더 이름을 붙여 구분한다.
+    """
+    files = sorted(set(files))
+    dirs = [x.split("/")[:-1] for x in files]
+    common: List[str] = []
+    if len(files) > 1:
+        for parts in zip(*dirs):
+            if len(set(p.lower() for p in parts)) == 1:
+                common.append(parts[0])
+            else:
+                break
+    elif dirs:
+        common = dirs[0]
+    nc = len(common)
+    mods: Dict[str, Tuple[str, str, str]] = {}
+    by_name: Dict[str, Set[str]] = defaultdict(set)
+    for x in files:
+        parts = x.split("/")
+        rest = parts[nc:-1]
+        gen = [i for i, c in enumerate(rest) if c.lower() in GENERIC_DIRS]
+        if gen:
+            mod = rest[:gen[-1]]
+            while mod and mod[-1].lower() in GENERIC_DIRS:
+                mod = mod[:-1]
+            if not mod:     # 맨 위가 일반 폴더('Common/Util/x.c'): 그 아래 첫 폴더
+                below = [i for i, c in enumerate(rest) if c.lower() not in GENERIC_DIRS]
+                mod = rest[:below[0] + 1] if below else []
+        else:
+            mod = rest
+        if not mod:
+            mods[x] = (posixpath.splitext(parts[-1])[0], "file", parts[-1])
+            continue
+        path = "/".join(parts[:nc + len(mod)])
+        mods[x] = (mod[-1], "structure", path)
+        by_name[mod[-1].lower()].add(path)
+    for x, (name, src, path) in list(mods.items()):
+        if src == "structure" and len(by_name[name.lower()]) > 1:
+            pp = path.split("/")
+            mods[x] = ("/".join(pp[-2:]) if len(pp) >= 2 else name, src, path)
+    return mods
+
+
+BASIS = ("auto", "arxml", "composition", "folder", "file")
+BASIS_LABEL = {"arxml": "ARXML(SWC) + 폴더 구조", "composition": "ARXML(컴포지션) + 폴더 구조", "folder": "폴더 구조",
+               "file": "파일 이름"}
+
+
+class FeatureMapping:
+    """한 버전 그래프의 함수·변수 → 기능 매핑(근거 포함).
+
+    매핑 파일(overrides, functions, paths, swcs, structure)은 항상 먼저 적용하고, 남은 함수는 '기능 나누는 기준'
+    (basis)으로 정한다. basis=auto면 ARXML을 쓸 수 있는지(Runnable 심벌이 코드 함수와 연결되는 비율)와 폴더 구조를
+    보고 고른다.
+      arxml        SWC 전용 함수 + SWC의 Runnable이 있는 모듈 폴더 + SWC 구현 파일 → SWC, 나머지(BSW·공용)는 폴더 구조
+      composition  위와 같되 SWC를 감싸는 가장 바깥 컴포지션 이름으로
+      folder       모듈 폴더(src·inc 같은 일반 폴더의 바로 위, 없으면 파일이 있는 폴더) 이름
+      file         파일 이름
+    """
+
+    def __init__(self, g: AnalysisGraph, spec: dict, arxml: Optional[dict] = None, basis: str = "auto"):
         self.g = g
         self.spec = spec
+        self.arxml = arxml or {}
+        self.basis_requested = basis if basis in BASIS else "auto"
         self.func: Dict[str, dict] = {}      # fn 키 -> {feature, source, evidence}
         self.var: Dict[str, str] = {}        # loc 키 -> feature
         self.ignored: Set[str] = set()
@@ -122,23 +187,51 @@ class FeatureMapping:
         self._struct_rx = [(pat, glob_to_regex(pat)) for pat in spec["structure"]]
         self._ignore_rx = [glob_to_regex(p) for p in spec["ignore"]]
         self.functions = [f for f in g.nodes_of(NK.FUNCTION) if not g.node(f).get("external")]
+        self._by_name: Dict[str, List[str]] = defaultdict(list)
+        for f in self.functions:
+            self._by_name[g.node(f).get("name") or f.split(":")[-1]].append(f)
+        self._runnables()
         self._autosar()
-        self._auto_structure()
+        self._modules()
+        self._decide()
         for f in self.functions:
             self._assign(f)
         self._assign_variables()
+        self._coverage()
+
+    # ---- Runnable: 그래프(차량 모델의 ARXML) + 자동 탐색 ARXML ----
+    def _runnables(self) -> None:
+        g = self.g
+        self.swc_entries: Dict[str, Dict[str, str]] = defaultdict(dict)   # swc -> {진입 함수 키: Runnable}
+        self.swc_kind: Dict[str, str] = {}
+        self.unlinked: List[Tuple[str, str, str]] = []                     # (swc, runnable, symbol)
+        total = 0
+        for t in g.nodes_of(NK.TASK):
+            d = g.node(t)
+            if d.get("ctx_kind") != "runnable" or not d.get("swc"):
+                continue
+            total += 1
+            for e in g.succ(t, [EK.ACTIVATES]):
+                self.swc_entries[d["swc"]][e] = d.get("name")
+        seen = {(s, r) for s, es in self.swc_entries.items() for r in es.values()}
+        for swc, sd in (self.arxml.get("swcs") or {}).items():
+            self.swc_kind[swc] = sd.get("kind")
+            for r in sd.get("runnables") or []:
+                if (swc, r["name"]) in seen:
+                    continue
+                total += 1
+                keys = self._by_name.get(r.get("symbol") or r["name"]) or []
+                if not keys:
+                    self.unlinked.append((swc, r["name"], r.get("symbol") or r["name"]))
+                for k in keys:
+                    self.swc_entries[swc][k] = r["name"]
+        self.runnable_total = total
+        self.runnable_linked = total - len(self.unlinked)
 
     # ---- AUTOSAR: SWC 전용 함수 ----
     def _autosar(self) -> None:
         g = self.g
         self.swc_reach: Dict[str, Set[str]] = {}
-        self.swc_entries: Dict[str, Dict[str, str]] = defaultdict(dict)   # swc -> {entry fn: runnable}
-        for t in g.nodes_of(NK.TASK):
-            d = g.node(t)
-            if d.get("ctx_kind") != "runnable" or not d.get("swc"):
-                continue
-            for e in g.succ(t, [EK.ACTIVATES]):
-                self.swc_entries[d["swc"]][e] = d.get("name")
         for swc, entries in self.swc_entries.items():
             seen, q = set(), deque(entries)
             while q:
@@ -161,38 +254,73 @@ class FeatureMapping:
                 runs = sorted(set(self.swc_entries[s].values()))
                 self.swc_only[f] = (s, f"{s}의 Runnable({', '.join(runs[:3])})에서만 호출")
 
-    # ---- 자동 폴더 구조 ----
-    def _auto_structure(self) -> None:
+    # ---- 폴더 구조: 모듈 폴더 ----
+    def _modules(self) -> None:
         files = sorted({self._file(f) for f in self.functions if self._file(f)})
-        dirs = [x.split("/")[:-1] for x in files]
-        common: List[str] = []
-        if dirs:
-            for parts in zip(*dirs):
-                if len(set(p.lower() for p in parts)) == 1:
-                    common.append(parts[0])
-                else:
-                    break
-        self._common = len(common)
-        keys: Dict[str, Tuple[str, str, str]] = {}
-        by_name: Dict[str, Set[str]] = defaultdict(set)
-        for x in files:
-            parts = x.split("/")
-            rest = parts[self._common:-1]
-            while rest and rest[-1].lower() in GENERIC_DIRS:
-                rest = rest[:-1]
-            if not rest:
-                stem = posixpath.splitext(parts[-1])[0]
-                keys[x] = (stem, "file", parts[-1])
+        mods = module_keys(files)
+        self._auto_keys = mods
+        self.module_paths = sorted({v[2] for v in mods.values() if v[1] == "structure"})
+        # 모듈 폴더 -> 그 폴더에 Runnable 진입 함수가 있는 SWC(하나뿐일 때만)
+        hosts: Dict[str, Set[str]] = defaultdict(set)
+        for swc, entries in self.swc_entries.items():
+            for e in entries:
+                fp = self._file(e)
+                if fp and mods.get(fp, (None, None))[1] == "structure":
+                    hosts[mods[fp][2]].add(swc)
+        self.module_swc = {m: next(iter(sw)) for m, sw in hosts.items() if len(sw) == 1}
+        self.module_shared = {m: sorted(sw) for m, sw in hosts.items() if len(sw) > 1}
+        # SWC 구현 정보(ARXML SWC-IMPLEMENTATION의 코드 파일 이름)
+        fs: Dict[str, Set[str]] = defaultdict(set)
+        for swc, names in (self.arxml.get("impl_files") or {}).items():
+            for n in names:
+                fs[posixpath.basename(n.replace("\\", "/")).lower()].add(swc)
+        self.impl_swc = {b: next(iter(sw)) for b, sw in fs.items() if len(sw) == 1}
+
+    # ---- 기준 결정 ----
+    def _decide(self) -> None:
+        req = self.basis_requested
+        n_swc = len(self.swc_entries)
+        total, linked = self.runnable_total, self.runnable_linked
+        ratio = linked / total if total else 0.0
+        files = list(self._auto_keys.values())
+        n_mod = len(self.module_paths)
+        in_mod = sum(1 for v in files if v[1] == "structure")
+        arxml_state = "없음" if not total else ("사용 가능" if ratio >= 0.5 and n_swc >= 1 else
+                                              ("부분 사용" if linked else "사용 불가"))
+        reasons: List[str] = []
+        if req == "auto":
+            if arxml_state in ("사용 가능", "부분 사용"):
+                basis = "arxml"
+                reasons.append(f"ARXML Runnable {total}개 중 {linked}개({ratio:.0%})가 코드 함수와 연결됨 → SWC로 나누고, "
+                               "SWC에 속하지 않는 함수(BSW·공용 코드)는 폴더 구조로 나눔")
+            elif n_mod >= 2:
+                basis = "folder"
+                reasons.append("쓸 수 있는 ARXML이 없음(" + ("파일 없음" if not total else f"연결 {linked}/{total}") +
+                               f") → 폴더 구조로 나눔(모듈 폴더 {n_mod}개)")
             else:
-                d = "/".join(parts[:self._common + len(rest)])
-                keys[x] = (rest[-1], "structure", d)
-                by_name[rest[-1].lower()].add(d)
-        # 이름이 같은 다른 폴더('AP/Function/PWM'와 'BSW/Mcal/Pwm')는 위 폴더 이름을 붙여 구분
-        for x, (name, src, ev) in list(keys.items()):
-            if src == "structure" and len(by_name[name.lower()]) > 1:
-                parts = ev.split("/")
-                keys[x] = ("/".join(parts[-2:]) if len(parts) >= 2 else name, src, ev)
-        self._auto_keys = keys
+                basis = "file"
+                reasons.append("ARXML이 없고 소스가 한 폴더에 모여 있음 → 파일 이름으로 나눔")
+        else:
+            basis = req
+            reasons.append(f"설정 feature_basis: {req}")
+            if req in ("arxml", "composition") and not linked:
+                reasons.append("ARXML Runnable이 코드와 연결되지 않아 실제로는 폴더 구조로 나뉨")
+        if self.spec["features"] or self.spec["structure"] or self.spec["overrides"]:
+            reasons.insert(0, f"매핑 파일 규칙(기능 {len(self.spec['features'])}개, 구조 규칙 {len(self.spec['structure'])}개, "
+                              f"개별 지정 {len(self.spec['overrides'])}개)을 먼저 적용")
+        self.basis = basis
+        self.decision = {
+            "requested": req, "basis": basis, "basis_label": BASIS_LABEL[basis], "reasons": reasons,
+            "arxml": {"state": arxml_state, "files": len(self.arxml.get("files") or []), "swcs": n_swc,
+                      "swc_kinds": dict(sorted(_count(self.swc_kind.get(s) or "runnable" for s in self.swc_entries).items())),
+                      "runnables": total, "linked": linked, "ratio": round(ratio, 3),
+                      "unlinked": [{"swc": a, "runnable": b, "symbol": c} for a, b, c in self.unlinked[:30]],
+                      "compositions": len(self.arxml.get("compositions") or {}),
+                      "errors": (self.arxml.get("errors") or [])[:10],
+                      "module_swc": dict(sorted(self.module_swc.items())), "module_shared": self.module_shared},
+            "folder": {"modules": n_mod, "files": len(files), "files_in_modules": in_mod,
+                       "examples": self.module_paths[:12]},
+        }
 
     def _file(self, f: str) -> Optional[str]:
         return (self.g.node(f).get("file") or "").replace("\\", "/") or None
@@ -206,6 +334,35 @@ class FeatureMapping:
             if m and m.groupdict().get("feature"):
                 return m.group("feature"), "structure_rule", pat
         return None
+
+    def _swc_of(self, f: str) -> Optional[Tuple[str, str, str]]:
+        """ARXML 근거로 정한 SWC: (swc, 근거 종류, 설명).
+
+        SWC 전용 함수라도 다른 모듈 폴더(예: BSW/Mcal/Pwm의 드라이버)에 있으면 폴더 구조를 따른다: 계층이 나뉜 폴더
+        구조에서는 SWC의 Runnable이 있는 모듈 폴더(홈 폴더) 안의 함수만 SWC로 묶는다.
+        """
+        path = self._file(f)
+        mod = self._auto_keys.get(path) if path else None
+        if f in self.swc_only:
+            s, why = self.swc_only[f]
+            homes = {m for m, sw in self.module_swc.items() if sw == s} | \
+                {m for m, sws in self.module_shared.items() if s in sws}
+            if not (mod and mod[1] == "structure" and homes and mod[2] not in homes):
+                return s, "autosar", why
+        if path:
+            if mod and mod[1] == "structure" and mod[2] in self.module_swc:
+                s = self.module_swc[mod[2]]
+                return s, "arxml_home", f"{s}의 Runnable이 있는 모듈 폴더 {mod[2]}"
+            b = posixpath.basename(path).lower()
+            if b in self.impl_swc:
+                s = self.impl_swc[b]
+                return s, "arxml_impl", f"ARXML {s} 구현 파일 목록에 {posixpath.basename(path)}"
+        return None
+
+    def _swc_feature(self, swc: str) -> str:
+        if self.basis == "composition":
+            return (self.arxml.get("top_composition") or {}).get(swc, swc)
+        return swc
 
     def _assign(self, f: str) -> None:
         g = self.g
@@ -225,22 +382,54 @@ class FeatureMapping:
         if hit and hit[1] == "map_path":
             self.func[f] = {"feature": hit[0], "source": "map_path", "evidence": hit[2]}
             return
-        if f in self.swc_only and self.swc_only[f][0] in self._swc_feat:
-            s, why = self.swc_only[f]
-            self.func[f] = {"feature": self._swc_feat[s], "source": "map_swc", "evidence": f"{s}: {why}"}
+        sw = self._swc_of(f)
+        if sw and sw[0] in self._swc_feat:
+            self.func[f] = {"feature": self._swc_feat[sw[0]], "source": "map_swc", "evidence": f"{sw[0]}: {sw[2]}"}
             return
         if hit:
             self.func[f] = {"feature": hit[0], "source": "structure_rule", "evidence": hit[2]}
             return
-        if f in self.swc_only:
-            s, why = self.swc_only[f]
-            self.func[f] = {"feature": s, "source": "autosar", "evidence": why}
+        if sw and self.basis in ("arxml", "composition"):
+            feat = self._swc_feature(sw[0])
+            ev = sw[2] + (f" (컴포지션 {feat})" if feat != sw[0] else "")
+            self.func[f] = {"feature": feat, "source": sw[1], "evidence": ev}
             return
         if path in self._auto_keys:
             key, src, ev = self._auto_keys[path]
+            if self.basis == "file" and src == "structure":
+                key, src, ev = posixpath.splitext(posixpath.basename(path))[0], "file", posixpath.basename(path)
             self.func[f] = {"feature": key, "source": src, "evidence": ev}
             return
         self.func[f] = {"feature": "(위치 모름)", "source": "file", "evidence": "파일 정보 없음"}
+
+    def _coverage(self) -> None:
+        cnt = _count(a["source"] for a in self.func.values())
+        n = max(1, len(self.func))
+        d = self.decision
+        d["coverage"] = {k: cnt[k] for k in sorted(cnt)}
+        d["functions"] = len(self.func)
+        d["ignored"] = len(self.ignored)
+        rec: List[str] = []
+        a = d["arxml"]
+        if a["state"] == "없음":
+            rec.append("ARXML을 찾지 못함: SWC·Runnable 기준을 쓰려면 설정 arxml에 ARXML 위치(폴더나 글롭)를 지정하세요.")
+        elif a["state"] in ("부분 사용", "사용 불가"):
+            ex = ", ".join(f"{u['runnable']}(SYMBOL {u['symbol']})" for u in a["unlinked"][:5])
+            rec.append(f"코드 함수와 연결되지 않은 Runnable {a['runnables'] - a['linked']}개(예: {ex}): RTE 매크로로 이름이 "
+                       "바뀌거나 다른 ECU의 SWC일 수 있음. 이 ECU의 ARXML만 지정하거나 매핑 파일 functions로 보정하세요.")
+        if a["module_shared"]:
+            rec.append("한 모듈 폴더에 여러 SWC의 Runnable이 있음(" + ", ".join(list(a["module_shared"])[:3]) +
+                       "): 폴더 전체를 SWC로 묶지 않고 SWC 전용 함수만 묶음.")
+        file_share = cnt.get("file", 0) / n
+        if file_share > 0.3 and d["basis"] != "file":
+            rec.append(f"함수 {file_share:.0%}가 파일 이름으로 나뉨(폴더 구조가 평평함): 매핑 파일 structure 규칙"
+                       "(예: 'AP/Function/{feature}/**')이나 paths로 묶으세요.")
+        if d["basis"] in ("arxml", "composition"):
+            swc_n = sum(cnt.get(k, 0) for k in ("autosar", "arxml_home", "arxml_impl", "map_swc"))
+            rec.append(f"SWC로 묶인 함수 {swc_n}개({swc_n / n:.0%}), 나머지는 폴더 구조·파일 이름으로 묶음.")
+        if not self.spec["features"]:
+            rec.append("검증자가 기능 이름·묶음을 확정하려면 out/feature_map_suggested.yaml을 고쳐 feature_map으로 지정하세요.")
+        d["recommendations"] = rec
 
     def feature_of_path(self, path: Optional[str]) -> Optional[str]:
         if not path:
@@ -300,6 +489,13 @@ class FeatureMapping:
         if a in self.func:
             return self.func[a]["feature"]
         return self.var.get(a)
+
+
+def _count(items) -> Dict[str, int]:
+    out: Dict[str, int] = defaultdict(int)
+    for x in items:
+        out[x] += 1
+    return dict(out)
 
 
 def _fn_glob(pat: str) -> str:
@@ -574,8 +770,9 @@ def _propagate(ch: dict, ia, go: AnalysisGraph, gn: AnalysisGraph, Ao: Abstracti
 # 전체
 # ---------------------------------------------------------------------------
 def build_feature_impact(go: AnalysisGraph, gn: AnalysisGraph, results: List[dict], ia, behavior: List[dict],
-                         spec: dict) -> dict:
-    Mo, Mn = FeatureMapping(go, spec), FeatureMapping(gn, spec)
+                         spec: dict, arxml_old: Optional[dict] = None, arxml_new: Optional[dict] = None,
+                         basis: str = "auto") -> dict:
+    Mo, Mn = FeatureMapping(go, spec, arxml_old, basis), FeatureMapping(gn, spec, arxml_new, basis)
     Ao, An = Abstraction(go), Abstraction(gn)
     Po, Pn = ProgramGraph(go, Ao), ProgramGraph(gn, An)
     Do, Dn = dependencies(Po, Mo), dependencies(Pn, Mn)
@@ -699,6 +896,7 @@ def build_feature_impact(go: AnalysisGraph, gn: AnalysisGraph, results: List[dic
                     "moved": [{"function": n, "old": o, "new": nw} for n, o, nw in moved],
                     "swcs": sorted(Mn.swc_reach)},
         "suggested_map": suggested_map_yaml(feats, Mn, spec),
+        "basis": {"new": Mn.decision, "old": Mo.decision},
     }
 
 
@@ -726,6 +924,7 @@ def _interface_functions(F: str, M: FeatureMapping, g: AnalysisGraph) -> Set[str
 def suggested_map_yaml(feats: Dict[str, dict], M: FeatureMapping, spec: dict) -> str:
     """지금 쓰인 매핑을 검증자가 고칠 수 있는 매핑 파일 형식으로(제안)."""
     lines = ["# 기능 매핑 제안 — 분석기가 자동으로 정한 매핑. 고쳐서 설정의 feature_map으로 지정하면 그대로 쓴다.",
+             f"# 기능 나누는 기준: {M.decision['basis_label']} — " + " / ".join(M.decision["reasons"]),
              "# 우선순위: overrides > functions(이름) > paths(경로) > swcs > structure 규칙 > AUTOSAR 자동 > 폴더 구조 > 파일 이름",
              "features:"]
     by_feat_files: Dict[str, Set[str]] = defaultdict(set)
@@ -734,7 +933,11 @@ def suggested_map_yaml(feats: Dict[str, dict], M: FeatureMapping, spec: dict) ->
         by_feat_src[a["feature"]].add(a["source"])
         fp = M.g.node(f).get("file")
         if fp:
-            by_feat_files[a["feature"]].add(posixpath.dirname(fp) + "/**" if a["source"] == "structure" else fp)
+            mod = M._auto_keys.get(fp.replace("\\", "/"))
+            if a["source"] in ("structure", "arxml_home") and mod and mod[1] == "structure":
+                by_feat_files[a["feature"]].add(mod[2] + "/**")
+            elif a["source"] not in ("autosar", "arxml_impl", "map_swc"):
+                by_feat_files[a["feature"]].add(fp)
     defined = {f["id"]: f for f in spec["features"]}
     for F in sorted(feats):
         e = feats[F]
@@ -749,8 +952,10 @@ def suggested_map_yaml(feats: Dict[str, dict], M: FeatureMapping, spec: dict) ->
                     lines.append(f"    {key}: [{', '.join(_y(x) for x in d[key])}]")
         else:
             paths = sorted(by_feat_files.get(F, ()))
-            if F in M.swc_reach:
-                lines.append(f"    swcs: [{_y(F)}]")
+            swcs = sorted(sw for sw in M.swc_reach if M._swc_feature(sw) == F)
+            if swcs:
+                lines.append(f"    swcs: [{', '.join(_y(x) for x in swcs)}]")
+                paths = sorted(x for x in paths if x.endswith("/**"))     # SWC로 묶인 함수는 swcs로 충분
             if paths:
                 lines.append(f"    paths: [{', '.join(_y(x) for x in paths[:10])}]")
             lines.append("    tests: []          # 이 기능의 회귀 시험 케이스(ID·이름)")
@@ -847,6 +1052,41 @@ FEATURE_CSS = """
 """
 
 
+def _basis_html(basis: dict) -> str:
+    d = basis.get("new")
+    if not d:
+        return ""
+    ax, fo = d["arxml"], d["folder"]
+    cov = d.get("coverage") or {}
+    n = max(1, d.get("functions") or 1)
+    swc_n = sum(cov.get(k, 0) for k in ("autosar", "arxml_home", "arxml_impl", "map_swc"))
+    map_n = sum(cov.get(k, 0) for k in ("override", "map_function", "map_path", "map_swc", "structure_rule"))
+    rows = [
+        ("매핑 파일", "적용" if map_n else "없음 / 규칙 없음",
+         f"함수 {map_n}개({map_n / n:.0%})를 검증자 규칙으로 지정" if map_n else "feature_map 파일에 features·structure·overrides를 적으면 가장 먼저 적용"),
+        ("ARXML(SWC·Runnable)", ax["state"],
+         (f"파일 {ax['files']}개, SWC {ax['swcs']}개({', '.join(f'{k} {v}' for k, v in ax['swc_kinds'].items())}), Runnable 연결 "
+          f"{ax['linked']}/{ax['runnables']}({ax['ratio']:.0%}), 컴포지션 {ax['compositions']}개, SWC로 묶인 함수 {swc_n}개"
+          if ax["runnables"] else "ARXML을 찾지 못함(소스 폴더 아래 자동 탐색, 설정 arxml로 위치 지정 가능)")
+         + ("<br>코드에 없는 Runnable: " + ", ".join(f"{_e(u['swc'])}.{_e(u['runnable'])}(SYMBOL <code>{_e(u['symbol'])}</code>)"
+                                                  for u in ax["unlinked"][:6]) if ax["unlinked"] else "")
+         + ("<br>SWC Runnable이 있는 모듈 폴더: " + ", ".join(f"<code>{_e(k)}</code> → {_e(v)}" for k, v in list(ax["module_swc"].items())[:8])
+            if ax["module_swc"] else "")),
+        ("폴더 구조", f"모듈 폴더 {fo['modules']}개", (", ".join(f"<code>{_e(x)}</code>" for x in fo["examples"][:8]) or "-")
+         + f" · 폴더 구조로 묶인 함수 {cov.get('structure', 0)}개"),
+        ("파일 이름", "보조", f"폴더 구분이 없는 파일의 함수 {cov.get('file', 0)}개"),
+    ]
+    body = "".join(f"<tr><th>{_e(a)}</th><td>{_e(b_)}</td><td class='fi-small'>{c}</td></tr>" for a, b_, c in rows)
+    rec = "".join(f"<li>{_e(r)}</li>" for r in d.get("recommendations") or [])
+    return (f"<div class='card' id='fi-basis'><h3 style='margin-top:0'>기능 나누는 기준: {_e(d['basis_label'])}"
+            f" <span class='mut fi-small'>(설정 feature_basis: {_e(d['requested'])})</span></h3>"
+            "<ul>" + "".join(f"<li>{_e(r)}</li>" for r in d["reasons"]) + "</ul>"
+            f"<table><tr><th>기준 후보</th><th>상태</th><th>근거</th></tr>{body}</table>"
+            + (f"<div><b>권고</b><ul>{rec}</ul></div>" if rec else "")
+            + "<div class='mut fi-small'>바꾸려면 설정 <code>feature_basis</code>(auto · arxml · composition · folder · file)와 "
+              "<code>arxml</code>(ARXML 위치)를, 미리 비교하려면 <code>python tools/feature_basis.py --config … --basis folder</code>.</div></div>")
+
+
 def feature_tab_html(fi: dict, files_rel: Optional[List[str]] = None) -> str:
     s = fi["summary"]
     b = [f"<style>{FEATURE_CSS}</style>"]
@@ -860,6 +1100,7 @@ def feature_tab_html(fi: dict, files_rel: Optional[List[str]] = None) -> str:
              f"<div class='card'><div class='mut'>간접 영향</div><div class='big' style='color:#a87900'>{s['indirect']}</div></div>"
              f"<div class='card'><div class='mut'>영향받는 외부 출력</div><div class='big'>{s['outputs']}</div>"
              f"<div class='mut'>CAN·RTE 신호, 레지스터, 관찰 대상</div></div></div>")
+    b.append(_basis_html(fi.get("basis") or {}))
     srcs = fi["mapping"]["sources"]
     b.append("<div class='card fi-small'>함수 → 기능 매핑: " + " · ".join(
         f"{_e(SOURCE_LABEL.get(k, k))} {v}" for k, v in sorted(srcs.items(), key=lambda x: -x[1]))

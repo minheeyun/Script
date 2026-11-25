@@ -19,6 +19,7 @@
 | `run_all.py` | 기능 분류 → 영향 분석 → 평가를 한 번에 실행 |
 | `tools/check_env.py` | 실행 환경 점검(패키지·libclang·내장 헤더·C 컴파일러·CBMC·git)과 설치 안내 |
 | `tools/new_project.py` | 내 프로젝트용 `analysis.yaml`·`vehicle_model.yaml` 만들기(빌드 로그 → compile DB 포함)와 설정 점검 |
+| `tools/feature_basis.py` | 기능 나누는 기준 진단: 폴더 구조·ARXML(SWC/Runnable)·매핑 파일 중 무엇으로 나뉘는지, ARXML 사용 가능 여부 |
 
 ## 설치
 
@@ -133,6 +134,10 @@ IDE 콘솔 출력(`<프로젝트>/Debug`에서 `../src/a.c`로 컴파일, includ
 compile DB가 이미 있으면 `--before-db`·`--after-db`에 파일(또는 그 파일이 있는 폴더)을 준다. 기존 설정은 `--force`일 때만
 덮어쓰고 `.bak`으로 남긴다. 만든 `vehicle_model.yaml`은 기능이 비어 있어도 실행된다(영향 범위·영향 그래프는 나오고, 기능 영향
 판정은 기능·관찰 대상을 적은 뒤부터).
+
+설정을 만들면 기능 나누는 기준 빠른 진단(ARXML 사용 가능 여부, 모듈 폴더 수, 고른 기준)도 출력한다. ARXML이 소스 폴더 밖에
+있으면 `analysis.yaml`의 `arxml`에 위치를 적고 `python tools/feature_basis.py --config my_project/analysis.yaml --quick`으로 다시 본다
+(자세한 규칙은 아래 '기능 나누는 기준').
 
 ```bash
 python run_all.py --config my_project/analysis.yaml
@@ -279,11 +284,58 @@ dot -Tsvg out/graph_export/impact_C003.dot -o impact_C003.svg
 | 1 | 매핑 파일 `overrides` | 함수 하나씩 바로잡기 |
 | 2 | 매핑 파일 `functions` / `paths` / `swcs` | 함수 이름 글롭, 경로 글롭(`AP/Function/PWM/**`), AUTOSAR SWC |
 | 3 | 매핑 파일 `structure` | 폴더 구조 규칙(`AP/Function/{feature}/**` → 폴더 이름이 기능) |
-| 4 | AUTOSAR(자동) | ARXML의 SWC·Runnable에서 **그 SWC의 Runnable에서만 호출되는 함수** = SWC 전용 함수 → SWC 이름 |
-| 5 | 폴더 구조(자동) | 파일이 있는 기능 폴더(`src`·`inc`·`cfg` 같은 일반 이름은 건너뜀, `AP/Function/PWM/src/pwm.c` → `PWM`) |
-| 6 | 파일 이름 | 모든 파일이 한 폴더에 있을 때 |
+| 4 | ARXML(기준이 arxml·composition일 때) | ① **그 SWC의 Runnable에서만 호출되는 함수**(SWC 전용 함수) ② SWC의 Runnable이 있는 모듈 폴더의 함수 ③ SWC-IMPLEMENTATION에 적힌 코드 파일의 함수 → SWC 이름(composition이면 가장 바깥 컴포지션 이름) |
+| 5 | 폴더 구조 | 모듈 폴더(아래 규칙) 이름 |
+| 6 | 파일 이름 | 모듈 폴더로 나눌 수 없을 때 |
 
 전역 변수는 같은 파일 함수들의 기능, 신호는 연결 근거로 쓴다. 매핑 파일은 설정의 `feature_map`으로 지정한다.
+
+### 기능 나누는 기준(폴더 구조 / ARXML / 매핑 파일)
+
+매핑 파일은 있으면 항상 먼저 적용된다. 나머지 함수를 무엇으로 나눌지는 설정 `feature_basis`로 정한다.
+기본값 `auto`는 프로젝트의 **폴더 구조와 ARXML 파일을 보고 자동으로 고른다**.
+
+| `feature_basis` | 나누는 방법 |
+|---|---|
+| `auto`(기본) | ARXML을 쓸 수 있으면 `arxml`, 아니면 모듈 폴더가 2개 이상이면 `folder`, 아니면 `file` |
+| `arxml` | SWC(위 표 4번) + 나머지(BSW·MCAL·공용 함수)는 폴더 구조 |
+| `composition` | `arxml`과 같지만 SWC 대신 SWC를 감싸는 가장 바깥 컴포지션 이름(기능을 더 크게 묶을 때) |
+| `folder` | 폴더 구조만 |
+| `file` | 파일 이름만 |
+
+**ARXML 사용 가능 여부** — ARXML의 Runnable `SYMBOL`(코드 함수 이름)이 실제 코드 함수 정의와 몇 개나 연결되는지로 판단한다.
+
+| 상태 | 조건 | auto일 때 |
+|---|---|---|
+| 사용 가능 | Runnable의 50% 이상이 코드 함수와 연결 | ARXML(SWC) + 폴더 구조 |
+| 부분 사용 | 일부만 연결(50% 미만) | ARXML(SWC) + 폴더 구조, 연결 안 된 Runnable 목록을 권고로 표시 |
+| 사용 불가 | 하나도 연결 안 됨(다른 ECU용 ARXML, SYMBOL 이름 규칙이 다름 등) | 폴더 구조 |
+| 없음 | ARXML 파일 없음, 또는 SWC·Runnable이 없음 | 폴더 구조 |
+
+- ARXML 위치: 설정 `versions.<버전>.arxml` > `arxml` > 버전 `root` 아래 자동 탐색(숨김·`out`·`build`·`Debug` 같은 산출물 폴더 제외).
+  `arxml`에는 글롭이나 폴더를 적는다(`arxml: ['S:/proj/Config/**/*.arxml']`). 차량 모델 파일의 `arxml`도 진단에 포함된다.
+- ARXML에서 읽는 것: 원자 SWC 종류(APPLICATION·SENSOR-ACTUATOR·SERVICE·CDD …), Runnable과 SYMBOL·주기·데이터 송수신,
+  포트, 컴포지션, SWC-IMPLEMENTATION 코드 파일. 큰 시스템 기술 파일도 요소 단위로 읽는다(400MB 초과 파일은 건너뜀).
+- **모듈 폴더** 규칙: 모든 파일에 공통인 앞 폴더를 뺀 뒤, 마지막 일반 폴더(`src`·`inc`·`cfg`·`common` …) 바로 위 폴더
+  (`AP/Function/PWM/src/sub/x.c` → `PWM`). 일반 폴더가 맨 위에 있으면 그 아래 첫 폴더(`Common/Util/x.c` → `Util`).
+  이름이 같은 다른 폴더는 위 폴더를 붙여 구분한다(`Function/PWM`과 `Mcal/Pwm`).
+- SWC Runnable에서만 불리더라도 **다른 모듈 폴더**(예: `BSW/Mcal/Pwm` 드라이버)에 있는 함수는 SWC로 흡수하지 않고 폴더 구조로 둔다.
+  여러 SWC가 같이 쓰는 공용 함수도 폴더 구조로 남는다.
+
+진단(무엇으로 나뉘는지, ARXML을 쓸 수 있는지 먼저 보기):
+
+```
+python tools/feature_basis.py --config my_project/analysis.yaml --quick      # 파싱 없이 파일만 보고(수 초)
+python tools/feature_basis.py --config my_project/analysis.yaml              # 분석 그래프로 실제 매핑·기능별 함수
+python tools/feature_basis.py --config my_project/analysis.yaml --basis folder   # 다른 기준과 비교
+python tools/feature_basis.py --config my_project/analysis.yaml --write-map my_project/feature_map.yaml
+```
+
+`tools/new_project.py`도 설정을 만든 뒤 같은 빠른 진단을 출력한다. 보고서 '기능 영향' 탭 맨 위 **기능 나누는 기준** 카드에
+고른 기준과 이유, 후보별 상태(매핑 파일 / ARXML / 폴더 구조 / 파일 이름), 코드에서 못 찾은 Runnable, 권고가 나온다.
+`examples/autosar_ecu`는 AUTOSAR 폴더 구조(AP/Function, BSW/Mcal, Common, Os)와 ARXML(SWC 4개 중 SWC_Lamp는 코드 없음,
+컴포지션 3개)로 된 예제다. `auto`로 ARXML(SWC)+폴더 구조가 선택되고(Runnable 4개 중 3개 연결, 75%),
+`Util_Clamp` 비교 연산자 변경 → Util(변경) → SWC_Pwm·SWC_Speed(직접) → Mcal/Pwm·SWC_Diag(간접) → PWM 레지스터·CAN 신호로 나온다.
 
 ```yaml
 # feature_map.yaml
@@ -334,6 +386,7 @@ overrides: {Some_Function: PWM}
 | `mvp_impact` / `resources` / `assumptions` / `report_generator` | 2.5단계 MVP, 비기능 추정, 분석 가정, JSON/HTML |
 | `portable` / `builtin_include/` | OS 차이 흡수(경로·명령줄·인코딩·하위 프로세스·해시 시드), Clang 내장 헤더 대체본 |
 | `feature_impact` | 함수 → 기능 매핑(매핑 파일·AUTOSAR·폴더 구조), 기능 간 의존 행렬, 변경 영향 단계 전파, 회귀 시험 범위, '기능 영향' 탭, CSV |
+| `arxml` / `feature_basis` | ARXML 탐색·요소 단위 읽기(SWC·Runnable·포트·컴포지션·구현 파일), 기능 나누는 기준 진단(빠른 진단·분석 그래프 진단) |
 | `impact_graph` / `report_assets/` / `vendor/` | 영향 그래프 데이터(변경 영향·함수 의존·모듈 의존, 전후 비교, 위험 후보), DOT·GraphML 내보내기, 보고서 탭(HTML·JS), 내장 Cytoscape.js |
 
 ## 기존 도구와의 관계(차별점)

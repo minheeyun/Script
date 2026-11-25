@@ -157,6 +157,19 @@ def check_config(cfg: AnalysisConfig, versions: Optional[List[str]] = None) -> T
                 load_feature_map(cfg.feature_map)
             except Exception as e:
                 errors.append(f"feature_map 파일을 읽을 수 없음: {cfg.feature_map} ({e})")
+    if cfg.feature_basis not in ("auto", "arxml", "composition", "folder", "file"):
+        errors.append(f"feature_basis 값이 잘못됨: {cfg.feature_basis} (auto | arxml | composition | folder | file)")
+    from .arxml import find_arxml, vehicle_model_arxml
+    for name in names:
+        v = cfg.versions.get(name)
+        if not v:
+            continue
+        pats = v.arxml or cfg.arxml
+        if pats and not find_arxml([v.root], pats):
+            warns.append(f"[{name}] arxml 설정({', '.join(pats)})에 맞는 ARXML 파일이 없음: 기능 기준은 폴더 구조로 정함")
+        elif cfg.feature_basis in ("arxml", "composition") and not pats and os.path.isdir(v.root) \
+                and not find_arxml([v.root], None, limit=1) and not vehicle_model_arxml(cfg, name):
+            warns.append(f"[{name}] feature_basis={cfg.feature_basis}이지만 {v.root} 아래에 ARXML이 없음: 설정 arxml에 위치를 지정하세요")
     if cfg.ground_truth and not os.path.isfile(cfg.ground_truth):
         warns.append(f"ground_truth가 없음: 평가(evaluate.py) 단계는 건너뜁니다 ({cfg.ground_truth})")
     if "VARIANT_SPORT" in (cfg.build.name or "") or cfg.project == "torque_ecu":

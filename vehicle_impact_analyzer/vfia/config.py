@@ -60,6 +60,7 @@ class VersionSpec:
     args: List[str] = field(default_factory=list)
     vehicle_model: Optional[List[str]] = None
     exclude: List[str] = field(default_factory=list)
+    arxml: Optional[List[str]] = None              # 이 버전의 ARXML 위치(폴더·글롭). 없으면 설정 arxml, 그것도 없으면 root 아래 자동 탐색
 
 
 @dataclass
@@ -110,6 +111,8 @@ class AnalysisConfig:
     history: Dict[str, Any] = field(default_factory=dict)      # 공변경 마이닝 입력(git 저장소 또는 JSON)
     ground_truth: Optional[str] = None                          # 평가용 정답셋
     feature_map: Optional[str] = None                           # 함수 → 기능 매핑 파일(기능 영향 탭)
+    feature_basis: str = "auto"                                 # 기능 나누는 기준: auto | arxml | composition | folder | file
+    arxml: Optional[List[str]] = None                           # ARXML 위치(폴더·글롭). 없으면 각 버전 root 아래 자동 탐색
 
     @property
     def base_dir(self) -> str:
@@ -182,6 +185,7 @@ def load_config(path: str) -> AnalysisConfig:
             args=list(v.get("args", []) or []),
             vehicle_model=_abs_list(base, v.get("vehicle_model")),
             exclude=list(v.get("exclude", []) or []),
+            arxml=_abs_list(base, v.get("arxml")),
         )
     opts = AnalysisOptions(**(raw.get("analysis") or {}))
     traces = {k: _abs(base, p) for k, p in (raw.get("traces") or {}).items()}
@@ -198,4 +202,6 @@ def load_config(path: str) -> AnalysisConfig:
         history={k: (_abs(base, v) if k in ("git", "file") else v) for k, v in (raw.get("history") or {}).items()},
         ground_truth=_abs(base, raw.get("ground_truth")),
         feature_map=_abs(base, raw.get("feature_map")),
+        feature_basis=str(raw.get("feature_basis") or "auto").strip().lower(),
+        arxml=_abs_list(base, raw.get("arxml")),
     )

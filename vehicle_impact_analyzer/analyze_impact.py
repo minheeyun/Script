@@ -177,8 +177,17 @@ def main(argv=None) -> int:
     fi, fi_files = None, []
     if not a.no_feature:
         log("기능 단위 영향(함수 → 기능 매핑, 기능 간 의존, 전파, 회귀 시험 범위)...")
+        from vfia.arxml import arxml_for_version
         from vfia.feature_impact import build_feature_impact, load_feature_map, write_csvs
-        fi = build_feature_impact(go, gn, results, ia, behavior, load_feature_map(cfg.feature_map))
+        ax_o, ax_n = arxml_for_version(cfg, a.before), arxml_for_version(cfg, a.after)
+        for name, ax in ((a.before, ax_o), (a.after, ax_n)):
+            if ax:
+                log(f"  [{name}] ARXML {len(ax['files'])}개({ax['search']}): SWC {len(ax['swcs'])}개, Runnable "
+                    f"{sum(len(s['runnables']) for s in ax['swcs'].values())}개" + (f", 오류 {len(ax['errors'])}건" if ax["errors"] else ""))
+        fi = build_feature_impact(go, gn, results, ia, behavior, load_feature_map(cfg.feature_map), ax_o, ax_n,
+                                  cfg.feature_basis)
+        bd = fi["basis"]["new"]
+        log(f"  기능 나누는 기준: {bd['basis_label']} — " + " / ".join(bd["reasons"]))
         fi_files = [os.path.relpath(p, out).replace(os.sep, "/") for p in write_csvs(fi, out)]
         data["feature_impact"] = {k: v for k, v in fi.items() if k != "suggested_map"}
         data["feature_impact"]["files"] = fi_files

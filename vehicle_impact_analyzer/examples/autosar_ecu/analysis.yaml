@@ -1,0 +1,21 @@
+# AUTOSAR 폴더 구조(AP/BSW/Common) + ARXML 예제: 기능 나누는 기준을 자동으로 정한다.
+project: autosar_ecu
+build:
+  name: 'LSS 예제(AP/BSW 폴더 + ARXML)'
+  compiler: auto
+versions:
+  before:
+    root: v1
+    compile_commands: v1/compile_commands.json
+  after:
+    root: v2
+    compile_commands: v2/compile_commands.json
+vehicle_model: [vehicle_model.yaml]
+feature_basis: auto        # auto | arxml | composition | folder | file  (auto: ARXML 연결률·폴더 구조를 보고 결정)
+# arxml: ['v2/Config/**/*.arxml']   # ARXML 위치. 비우면 각 버전 소스 폴더 아래 *.arxml을 자동으로 찾는다
+# feature_map: feature_map.yaml     # 검증자 매핑 파일(있으면 가장 먼저 적용)
+analysis:
+  exec_compare: auto
+  mmio_map:
+    PWM0_DUTY_REG: 0xF0003000
+output_dir: out

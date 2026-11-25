@@ -46,7 +46,9 @@ analysis:
   # graph_cluster_threshold: 150      # 영향 그래프 묶음 표시 기준
   # mmio_map: {{PWM_DUTY_REG: 0xF0003000}}
 output_dir: out
-feature_map: feature_map.yaml   # 함수 → 기능 매핑('기능 영향' 탭). 비어 있으면 자동(SWC·폴더 구조·파일 이름)
+feature_map: feature_map.yaml   # 함수 → 기능 매핑('기능 영향' 탭). 비어 있으면 아래 기준으로 자동
+feature_basis: auto             # 기능 나누는 기준: auto(ARXML 연결률·폴더 구조로 결정) | arxml | composition | folder | file
+# arxml: ['S:/proj/Config/**/*.arxml']   # ARXML 위치(비우면 각 버전 소스 폴더 아래 자동 탐색)
 # review_file: feature_review.yaml    # 검토자가 기능 연결을 확정/기각한 기록(선택)
 # ground_truth: ground_truth.yaml     # 평가용 정답셋(선택, 있으면 evaluate.py 실행)
 # history: {{git: 'S:/proj/repo'}}       # 공변경 근거(선택)
@@ -203,7 +205,15 @@ def main(argv=None) -> int:
         print(f"  [오류] {e}")
     if errors:
         return 2
-    print("  오류 없음.\n\n다음 실행:")
+    print("  오류 없음.")
+    from vfia.feature_basis import quick_for_config, quick_text
+    for side in ("before", "after"):
+        print(f"\n기능 나누는 기준 진단[{side}] (코드 분석 전, 파일 기준):")
+        for line in quick_text(quick_for_config(cfg, side)):
+            print("  " + line)
+    print("  바꾸려면 analysis.yaml의 feature_basis(auto | arxml | composition | folder | file), ARXML 위치는 arxml: [...]")
+    print("  분석 그래프 기준 상세 진단: python tools/feature_basis.py --config " + os.path.join(a.dir, "analysis.yaml"))
+    print("\n다음 실행:")
     print(f"  python run_all.py --config {os.path.join(a.dir, 'analysis.yaml')}")
     print("기능·관찰 대상을 vehicle_model.yaml에 적으면 '어떤 기능에 영향이 가는지'까지 판정합니다.")
     return 0

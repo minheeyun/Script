@@ -1,0 +1,114 @@
+[
+  {
+    "directory": ".",
+    "file": "AP/Function/DIAG/diag.c",
+    "arguments": [
+      "gcc",
+      "-Iinclude",
+      "-ICommon/Util/inc",
+      "-IAP/Function/SPEED/inc",
+      "-IAP/Function/PWM/inc",
+      "-IAP/Function/DIAG",
+      "-IBSW/Mcal/Pwm/inc",
+      "-std=c99",
+      "-c",
+      "AP/Function/DIAG/diag.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "AP/Function/PWM/src/pwm_calc.c",
+    "arguments": [
+      "gcc",
+      "-Iinclude",
+      "-ICommon/Util/inc",
+      "-IAP/Function/SPEED/inc",
+      "-IAP/Function/PWM/inc",
+      "-IAP/Function/DIAG",
+      "-IBSW/Mcal/Pwm/inc",
+      "-std=c99",
+      "-c",
+      "AP/Function/PWM/src/pwm_calc.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "AP/Function/PWM/src/pwm_main.c",
+    "arguments": [
+      "gcc",
+      "-Iinclude",
+      "-ICommon/Util/inc",
+      "-IAP/Function/SPEED/inc",
+      "-IAP/Function/PWM/inc",
+      "-IAP/Function/DIAG",
+      "-IBSW/Mcal/Pwm/inc",
+      "-std=c99",
+      "-c",
+      "AP/Function/PWM/src/pwm_main.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "AP/Function/SPEED/src/spd_main.c",
+    "arguments": [
+      "gcc",
+      "-Iinclude",
+      "-ICommon/Util/inc",
+      "-IAP/Function/SPEED/inc",
+      "-IAP/Function/PWM/inc",
+      "-IAP/Function/DIAG",
+      "-IBSW/Mcal/Pwm/inc",
+      "-std=c99",
+      "-c",
+      "AP/Function/SPEED/src/spd_main.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "BSW/Mcal/Pwm/src/Pwm.c",
+    "arguments": [
+      "gcc",
+      "-Iinclude",
+      "-ICommon/Util/inc",
+      "-IAP/Function/SPEED/inc",
+      "-IAP/Function/PWM/inc",
+      "-IAP/Function/DIAG",
+      "-IBSW/Mcal/Pwm/inc",
+      "-std=c99",
+      "-c",
+      "BSW/Mcal/Pwm/src/Pwm.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "Common/Util/src/util.c",
+    "arguments": [
+      "gcc",
+      "-Iinclude",
+      "-ICommon/Util/inc",
+      "-IAP/Function/SPEED/inc",
+      "-IAP/Function/PWM/inc",
+      "-IAP/Function/DIAG",
+      "-IBSW/Mcal/Pwm/inc",
+      "-std=c99",
+      "-c",
+      "Common/Util/src/util.c"
+    ]
+  },
+  {
+    "directory": ".",
+    "file": "Os/src/Os_Tasks.c",
+    "arguments": [
+      "gcc",
+      "-Iinclude",
+      "-ICommon/Util/inc",
+      "-IAP/Function/SPEED/inc",
+      "-IAP/Function/PWM/inc",
+      "-IAP/Function/DIAG",
+      "-IBSW/Mcal/Pwm/inc",
+      "-std=c99",
+      "-c",
+      "Os/src/Os_Tasks.c"
+    ]
+  }
+]

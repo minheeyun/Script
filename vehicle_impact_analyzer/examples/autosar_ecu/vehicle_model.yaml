@@ -1,0 +1,10 @@
+# 차량 기능 연결 정보(이 예제는 기능 영향 탭 시연용으로 신호와 실행 문맥만 둔다)
+ecu: ECU_LSS
+features: []
+execution:
+  tasks:
+    - {name: Task_10ms, entry: Task_10ms, period_ms: 10, priority: 5}
+signals:
+  - {name: PpPwmDuty_Value, direction: tx, can_id: 0x210}
+  - {name: PpDiagFault_Value, direction: tx, can_id: 0x211}
+  - {name: RpSpeedRaw_Value, direction: rx, can_id: 0x1A0}
