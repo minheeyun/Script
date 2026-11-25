@@ -69,11 +69,11 @@ PowerShell 기준이다. 경로 구분자는 `\`와 `/` 모두 된다.
 1. 저장소 받기(브랜치 지정 필수):
 
 ```bash
-git clone -b claude/vehicle-impact-analyzer https://github.com/minheeyun/company.git
+git clone -b claude/vehicle-impact-analyzer https://github.com/minheeyun/Script.git
 ```
 
 ```bash
-cd company\vehicle_impact_analyzer
+cd Script\vehicle_impact_analyzer
 ```
 
 2. 패키지 설치와 환경 점검:
